@@ -1,0 +1,15 @@
+{
+  "name": "ticket-application-bot",
+  "version": "8.1.0",
+  "description": "Professional ticket system with multi-role staff support and DM-based applications",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
