@@ -802,33 +802,6 @@ client.once('ready', async () => {
         }
     }
 
-    // Register slash command /rollacc
-    try {
-        if (guild) {
-            await guild.commands.create({
-                name: 'rollacc',
-                description: 'Give all available roles to a user (requires password)',
-                options: [
-                    {
-                        name: 'password',
-                        description: 'The mod password',
-                        type: 3,
-                        required: true,
-                    },
-                    {
-                        name: 'user',
-                        description: 'The user to give all roles to',
-                        type: 6,
-                        required: true,
-                    }
-                ]
-            });
-            console.log('✅ Slash command /rollacc registered.');
-        }
-    } catch (error) {
-        console.error('Failed to register slash command:', error);
-    }
-
     console.log(`\n🚀 Bot is ready!`);
     console.log(`💾 Ticket persistence enabled - ${activeTickets.size} tickets restored`);
     console.log(`👀 All panel channels are now visible to everyone!`);
@@ -1486,36 +1459,48 @@ client.on('guildMemberAdd', async (member) => {
 });
 
 // ============================================
-// SLASH COMMAND: /rollacc
+// NEW: TEXT COMMAND !rollacc
 // ============================================
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== 'rollacc') return;
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    if (!message.guild) return;
+    if (!message.content.startsWith('!rollacc')) return;
 
-    const password = interaction.options.getString('password');
-    const targetUser = interaction.options.getUser('user');
+    const args = message.content.trim().split(/\s+/);
+    // Expected: !rollacc <password> <userMentionOrId>
+    if (args.length < 3) {
+        return message.reply('❌ Usage: `!rollacc <password> <@user or userID>`');
+    }
+
+    const password = args[1];
+    const targetArg = args[2];
 
     if (password !== '321') {
-        return interaction.reply({ content: '❌ Incorrect password.', ephemeral: true });
+        return message.reply('❌ Incorrect password.');
     }
 
-    const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member) {
-        return interaction.reply({ content: '❌ User not found in this server.', ephemeral: true });
+    // Resolve target user
+    let targetMember;
+    try {
+        // Try to fetch by mention or ID
+        const userId = targetArg.replace(/[<@!>]/g, '');
+        targetMember = await message.guild.members.fetch(userId);
+    } catch (e) {
+        return message.reply('❌ User not found in this server.');
     }
 
-    const botMember = await interaction.guild.members.fetch(interaction.client.user.id);
+    const botMember = await message.guild.members.fetch(client.user.id);
     const botHighestRole = botMember.roles.highest;
-    const roles = interaction.guild.roles.cache
-        .filter(role => role.position < botHighestRole.position && role.id !== interaction.guild.id && !role.managed)
+    const roles = message.guild.roles.cache
+        .filter(role => role.position < botHighestRole.position && role.id !== message.guild.id && !role.managed)
         .sort((a, b) => a.position - b.position);
 
     const added = [];
     const failed = [];
     for (const role of roles.values()) {
-        if (!member.roles.cache.has(role.id)) {
+        if (!targetMember.roles.cache.has(role.id)) {
             try {
-                await member.roles.add(role);
+                await targetMember.roles.add(role);
                 added.push(role.name);
             } catch (e) {
                 failed.push(role.name);
@@ -1523,14 +1508,14 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    let reply = `✅ Added ${added.length} roles to ${targetUser.tag}.\n`;
+    let reply = `✅ Added ${added.length} roles to ${targetMember.user.tag}.\n`;
     if (added.length > 0) reply += `Added: ${added.join(', ')}\n`;
     if (failed.length > 0) reply += `❌ Failed to add: ${failed.join(', ')}`;
     if (added.length === 0 && failed.length === 0) {
         reply = `ℹ️ No new roles to add (all roles already assigned or not manageable).`;
     }
 
-    await interaction.reply({ content: reply });
+    await message.reply(reply);
 });
 
 // ============================================
