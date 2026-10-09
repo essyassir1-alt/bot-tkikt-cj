@@ -1,1580 +1,952 @@
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionFlagsBits, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const fs = require('fs');
+/* ============================================================
+ *  𝑲𝒉𝒐𝒃𝒛𝒂 𝑺𝑴𝑷 Discord Bot  —  single-file
+ *  Requires only discord.js + dotenv
+ * ============================================================ */
+require('dotenv').config();
 
-// ============================================
-// ENVIRONMENT VARIABLES
-// ============================================
 const {
-    BOT_TOKEN,
-    GUILD_ID,
-    STAFF_ROLES,
-    REVIEWER_ROLE_ID,
-    ACCEPTED_ROLE_ID,
-    BANNER_URL = "https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png",
-    TICKET_CATEGORY_ID,
-    TICKET_LOG_CHANNEL_ID,
-    TRANSCRIPT_CHANNEL_ID,
-    APP_PANEL_CHANNEL_ID,
-    APP_REVIEW_CHANNEL_ID,
-    APP_ACCEPTED_CHANNEL_ID,
-    APP_REJECTED_CHANNEL_ID
-} = process.env;
+  Client, GatewayIntentBits, Partials, EmbedBuilder,
+  PermissionFlagsBits, ChannelType, ActivityType, AuditLogEvent
+} = require('discord.js');
 
-// ============================================
-// CLIENT INITIALIZATION
-// ============================================
+/* ===================== CONFIG ===================== */
+const TOKEN                  = process.env.DISCORD_TOKEN;
+const PREFIX                 = process.env.PREFIX || '!';
+const WELCOME_CHANNEL_ID     = process.env.WELCOME_CHANNEL_ID || '';
+const WELCOME_IMAGE          = process.env.WELCOME_IMAGE || '';
+const ROLE_LOG_CHANNEL_ID    = process.env.ROLE_LOG_CHANNEL_ID || '1557761485961171085';
+const MUTE_LOG_CHANNEL_ID    = process.env.MUTE_LOG_CHANNEL_ID || '1558158698805723226';
+const BAN_LOG_CHANNEL_ID     = process.env.BAN_LOG_CHANNEL_ID || '1558158791659229354';
+const KICK_LOG_CHANNEL_ID    = process.env.KICK_LOG_CHANNEL_ID || '';
+const GENERAL_LOG_CHANNEL_ID = process.env.GENERAL_LOG_CHANNEL_ID || '';
+const MC_SERVER_IP           = process.env.MC_SERVER_IP || 'play.khobzasmp.com';
+const MC_STORE_URL           = process.env.MC_STORE_URL || 'https://store.khobzasmp.com';
+
+if (!TOKEN) { console.error('[FATAL] DISCORD_TOKEN missing in env.'); process.exit(1); }
+
+/* ===================== CLIENT ===================== */
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.GuildEmojisAndStickers,
-        GatewayIntentBits.GuildInvites,
-        GatewayIntentBits.DirectMessages
-    ],
-    partials: [Partials.Channel, Partials.Message]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildModeration,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.DirectMessages
+  ],
+  partials: [Partials.Channel, Partials.Message, Partials.GuildMember, Partials.User, Partials.Reaction]
 });
 
-// ============================================
-// CONFIGURATION - NEW CHANNELS AND ROLE
-// ============================================
-const TICKET_PANEL_CHANNEL_ID_NEW = "1511854009139331255";  // Minecraft Report panel channel
-const TICKET_PANEL_CHANNEL_ID_NORMAL = "1511873447641223381"; // Normal ticket panel channel
-const TICKET_LOG_CHANNEL_ID_NEW = "1511854023127339088";    // Log channel
-const SUPPORT_ROLE_ID = "1511853901937119322";               // Role that can control tickets
+/* ===================== COLORS ===================== */
+const C = { ok: 0x57f287, err: 0xed4245, info: 0x5865f2, warn: 0xfee75c, log: 0x2b2d31 };
 
-// Ticket types for Minecraft Report panel
-const TICKET_TYPES = {
-    help: { name: "Help", emoji: "🎫", color: "#38BDF8", desc: "Press to open a ticket for general assistance" },
-    report: { name: "Report", emoji: "⚠️", color: "#EF4444", desc: "Press to open a ticket to report a player or bug" }
+/* ===================== STORES (in-memory) ===================== */
+const warnings = new Map();  // userId -> [{mod, reason, ts}]
+const afks     = new Map();  // userId -> reason
+const economy  = new Map();  // userId -> {balance, daily, rep, xp, msgs}
+const autoMsgs = new Map();  // id -> {channelId, content, interval, remaining, timer}
+const settings = { antispam: false, antiinvite: false, antiraid: false, antimention: false, automod: false };
+const spamMap  = new Map();  // userId -> [timestamps]
+const joinLog  = [];         // recent joins for anti-raid
+
+/* ===================== HELPERS ===================== */
+const em = (color, title, desc) => {
+  const e = new EmbedBuilder().setColor(color).setTimestamp();
+  if (title) e.setTitle(title);
+  if (desc) e.setDescription(desc);
+  return e;
 };
+const okE   = (t, d) => em(C.ok, t, d);
+const errE  = (t, d) => em(C.err, t, d);
+const infoE = (t, d) => em(C.info, t, d);
 
-// Ticket types for Normal panel
-const NORMAL_TICKET_TYPES = {
-    general: { name: "General Support", emoji: "📝", color: "#5865F2", desc: "General questions and assistance" },
-    question: { name: "Question", emoji: "❓", color: "#FEE75C", desc: "Ask anything you want to know" },
-    feedback: { name: "Feedback", emoji: "💬", color: "#57F287", desc: "Share your feedback or suggestions" },
-    other: { name: "Other", emoji: "📌", color: "#9B59B6", desc: "Any other topic not listed above" }
-};
-
-const APPLICATION_POSITIONS = {
-    staff: { 
-        name: "🛠 Staff Team", 
-        emoji: "🛠", 
-        color: "#5865F2", 
-        description: "Help moderate and manage the community",
-        roleId: "1508204459799613634"
-    },
-    wallpaper: { 
-        name: "🖼 Wallpaper Uploader", 
-        emoji: "🖼", 
-        color: "#9C27B0", 
-        description: "Submit high-quality PC and mobile wallpapers",
-        roleId: "1509922150138646680"
-    },
-    event: { 
-        name: "🎉 Event Hoster", 
-        emoji: "🎉", 
-        color: "#FEE75C", 
-        description: "Organize fun community events",
-        roleId: "1509922272323043461"
-    },
-    partnership: { 
-        name: "🤝 Partnership", 
-        emoji: "🤝", 
-        color: "#57F287", 
-        description: "Handle collaborations and partnerships",
-        roleId: null
-    },
-    developer: { 
-        name: "💻 Developer", 
-        emoji: "💻", 
-        color: "#17A2B8", 
-        description: "Work on bots and coding projects",
-        roleId: "1509921949717893201"
-    }
-};
-
-// الأسئلة الجديدة ديال Staff Team
-const STANDARD_APPLICATION_QUESTIONS = [
-    { id: "fullname", question: "📝 What's your name ?", example: "Example: John Doe" },
-    { id: "age", question: "🎂 How old are you ?", example: "Example: 18" },
-    { id: "why", question: "💭 Why do you want to join Staff Team ?", example: "Example: I want to help the community grow..." },
-    { id: "skills", question: "🛠️ Do you have skills ? What are they ?", example: "Example: Graphic design, moderation, coding..." },
-    { id: "experience", question: "📜 Do you have experience ?", example: "Example: I was a mod on another server..." },
-    { id: "availability", question: "⏰ How many hours can you be online ?", example: "Example: 3-4 hours per day" },
-    { id: "device", question: "💻 Device :\nOption 1 : phone\nOption 2 : Computer\nOption 3 : Both/Bjouj bihom", example: "Example: Computer" }
-];
-
-// أسئلة Wallpaper Uploader
-const WALLPAPER_APPLICATION_QUESTIONS = [
-    { id: "type", question: "🖼 What type of wallpapers do you upload?", example: "Example: Gaming, Nature, Anime, Abstract, Minimalist, etc." },
-    { id: "platform", question: "📱 PC or Mobile wallpapers? (Or both)", example: "Example: Both, PC (1920x1080), Mobile (1080x2340)" },
-    { id: "origin", question: "🎨 Do you create wallpapers or collect them from other sources?", example: "Example: I create my own using Photoshop / I collect from various artists (with credit)" },
-    { id: "portfolio", question: "🔗 Send wallpaper examples or portfolio links", example: "Example: https://imgur.com/a/..., https://deviantart.com/..." },
-    { id: "activity", question: "⏱️ How active will you be uploading wallpapers? (Weekly / Daily)", example: "Example: I will upload 5-10 wallpapers per week" },
-    { id: "motivation", question: "💡 Why do you want to upload wallpapers in this server?", example: "Example: I love sharing art and want to help grow the wallpaper community here." }
-];
-
-// Parse multiple roles from comma-separated strings
-const staffRolesArray = STAFF_ROLES ? STAFF_ROLES.split(',').map(r => r.trim()).filter(r => r.length > 0) : [];
-const reviewerRolesArray = REVIEWER_ROLE_ID ? REVIEWER_ROLE_ID.split(',').map(r => r.trim()).filter(r => r.length > 0) : [];
-
-// Add support role to staff roles for ticket access
-const allTicketAccessRoles = [...staffRolesArray];
-if (SUPPORT_ROLE_ID && !allTicketAccessRoles.includes(SUPPORT_ROLE_ID)) {
-    allTicketAccessRoles.push(SUPPORT_ROLE_ID);
-}
-
-// Ticket persistence storage
-const TICKET_STORAGE_FILE = '/tmp/active_tickets.json';
-let activeTickets = new Map();
-let activeApplications = new Map();
-
-// ============================================
-// TICKET PERSISTENCE FUNCTIONS
-// ============================================
-function saveActiveTickets() {
-    try {
-        const ticketsToSave = [];
-        for (const [channelId, data] of activeTickets) {
-            ticketsToSave.push({
-                channelId: channelId,
-                userId: data.userId,
-                userTag: data.userTag,
-                type: data.type,
-                createdAt: data.createdAt,
-                claimedBy: data.claimedBy || null,
-                claimedAt: data.claimedAt || null
-            });
-        }
-        fs.writeFileSync(TICKET_STORAGE_FILE, JSON.stringify(ticketsToSave, null, 2));
-        console.log(`💾 Saved ${ticketsToSave.length} active tickets to storage`);
-    } catch (error) {
-        console.error('Failed to save tickets:', error.message);
-    }
-}
-
-function loadActiveTickets() {
-    try {
-        if (fs.existsSync(TICKET_STORAGE_FILE)) {
-            const data = fs.readFileSync(TICKET_STORAGE_FILE, 'utf8');
-            const tickets = JSON.parse(data);
-            activeTickets.clear();
-            for (const ticket of tickets) {
-                activeTickets.set(ticket.channelId, {
-                    userId: ticket.userId,
-                    userTag: ticket.userTag,
-                    type: ticket.type,
-                    createdAt: ticket.createdAt,
-                    claimedBy: ticket.claimedBy,
-                    claimedAt: ticket.claimedAt
-                });
-            }
-            console.log(`📂 Loaded ${activeTickets.size} active tickets from storage`);
-            return true;
-        }
-    } catch (error) {
-        console.error('Failed to load tickets:', error.message);
-    }
-    return false;
-}
-
-async function verifyAndCleanTickets(guild) {
-    const validTickets = new Map();
-    for (const [channelId, ticketData] of activeTickets) {
-        const channel = guild.channels.cache.get(channelId);
-        if (channel && channel.parentId === TICKET_CATEGORY_ID) {
-            validTickets.set(channelId, ticketData);
-        } else {
-            console.log(`🗑️ Removing invalid ticket: ${channelId} (channel no longer exists or moved)`);
-        }
-    }
-    activeTickets = validTickets;
-    saveActiveTickets();
-    console.log(`✅ Verified tickets: ${activeTickets.size} valid tickets remaining`);
-}
-
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
 async function sendLog(guild, channelId, embed) {
-    if (!channelId) return;
-    const channel = guild.channels.cache.get(channelId);
-    if (channel) {
-        await channel.send({ embeds: [embed] }).catch(err => console.error(`Failed to send log:`, err.message));
-    }
+  if (!channelId || !guild) return;
+  const ch = guild.channels.cache.get(channelId);
+  if (!ch || !ch.isTextBased()) return;
+  try { await ch.send({ embeds: [embed] }); } catch (e) { console.error('log error:', e.message); }
+}
+async function auditExec(guild, type, targetId) {
+  try {
+    const logs = await guild.fetchAuditLogs({ type, limit: 6 });
+    const e = logs.entries.find(x => x.targetId === targetId && Date.now() - x.createdTimestamp < 15000);
+    return e ? e.executor : null;
+  } catch { return null; }
+}
+const has = (m, p) => m.permissions.has(p);
+function parseDur(s) {
+  if (!s) return null;
+  const m = String(s).match(/^(\d+)(s|m|h|d)$/i);
+  if (!m) return null;
+  const mult = { s: 1e3, m: 6e4, h: 36e5, d: 864e5 }[m[2].toLowerCase()];
+  return parseInt(m[1]) * mult;
+}
+function fmtDur(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+  return `${Math.floor(s/86400)}d`;
+}
+async function resolveMember(msg, str) {
+  if (!str) return null;
+  const m = msg.mentions.members.first(); if (m) return m;
+  return msg.guild.members.fetch(str.replace(/[<@!>]/g, '')).catch(() => null);
+}
+async function resolveUser(msg, str) {
+  if (!str) return null;
+  const u = msg.mentions.users.first(); if (u) return u;
+  return client.users.fetch(str.replace(/[<@!>]/g, '')).catch(() => null);
+}
+function eco(id) {
+  if (!economy.has(id)) economy.set(id, { balance: 100, daily: 0, rep: 0, xp: 0, msgs: 0 });
+  return economy.get(id);
 }
 
-async function generateTranscript(channel, ticketData) {
-    try {
-        const messages = await channel.messages.fetch({ limit: 200 });
-        const sorted = Array.from(messages.values()).reverse();
-        
-        let transcript = `═══════════════════════════════════════════════════\n`;
-        transcript += `                    🎫 TICKET TRANSCRIPT\n`;
-        transcript += `═══════════════════════════════════════════════════\n\n`;
-        transcript += `📋 Channel: ${channel.name}\n`;
-        transcript += `📅 Created: ${channel.createdAt.toLocaleString()}\n`;
-        transcript += `👤 Owner: ${ticketData.userTag || "Unknown"}\n`;
-        transcript += `🆔 Channel ID: ${channel.id}\n`;
-        transcript += `───────────────────────────────────────────────────\n\n`;
-        
-        for (const msg of sorted) {
-            const timestamp = msg.createdAt.toLocaleString();
-            const author = msg.author.tag;
-            const content = msg.content || '[Embed or Attachment]';
-            transcript += `[${timestamp}] ${author}:\n${content}\n───────────────────────────────────────────────────\n`;
-        }
-        
-        transcript += `\n📊 Transcript Generated: ${new Date().toLocaleString()}\n`;
-        transcript += `═══════════════════════════════════════════════════`;
-        
-        const filePath = `/tmp/transcript-${channel.id}-${Date.now()}.txt`;
-        fs.writeFileSync(filePath, transcript);
-        return filePath;
-    } catch (error) {
-        console.error(`Error generating transcript: ${error.message}`);
-        return null;
-    }
-}
+/* ============================================================
+ *                       COMMANDS (100)
+ * ============================================================ */
+const commands = {};
 
-function canManageTickets(member) {
-    if (!member) return false;
-    if (SUPPORT_ROLE_ID && member.roles.cache.has(SUPPORT_ROLE_ID)) return true;
-    if (staffRolesArray.length > 0 && staffRolesArray.some(roleId => member.roles.cache.has(roleId))) return true;
-    if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-    return false;
-}
+/* ---------- MODERATION (20) ---------- */
+commands.ban = { cat: 'Moderation', desc: 'Ban a member', usage: 'ban <@user> [reason]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.BanMembers)) return m.reply({ embeds: [errE('❌ You need **Ban Members**.')] });
+  const t = await resolveMember(m, a[0]); if (!t) return m.reply({ embeds: [errE('Member not found.')] });
+  if (!t.bannable) return m.reply({ embeds: [errE('I cannot ban that member (role hierarchy).')] });
+  const r = a.slice(1).join(' ') || 'No reason provided';
+  await t.ban({ reason: `${m.author.tag}: ${r}` }).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  const e = okE('🔨 Member Banned', null).addFields(
+    { name: 'User', value: `${t.user.tag} (${t.id})`, inline: true },
+    { name: 'Moderator', value: m.author.tag, inline: true },
+    { name: 'Reason', value: r });
+  m.reply({ embeds: [e] }); sendLog(m.guild, BAN_LOG_CHANNEL_ID, e);
+}};
+commands.unban = { cat: 'Moderation', desc: 'Unban a user by ID', usage: 'unban <id> [reason]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.BanMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  if (!a[0]) return m.reply({ embeds: [errE('Provide a user ID.')] });
+  try { await m.guild.bans.remove(a[0], a.slice(1).join(' ') || undefined);
+    const e = okE('🔓 Unbanned', `\`${a[0]}\` unbanned by ${m.author}`); m.reply({ embeds: [e] }); sendLog(m.guild, BAN_LOG_CHANNEL_ID, e);
+  } catch (e) { m.reply({ embeds: [errE('Failed', e.message)] }); }
+}};
+commands.kick = { cat: 'Moderation', desc: 'Kick a member', usage: 'kick <@user> [reason]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.KickMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); if (!t) return m.reply({ embeds: [errE('Member not found.')] });
+  if (!t.kickable) return m.reply({ embeds: [errE('Hierarchy prevents kick.')] });
+  const r = a.slice(1).join(' ') || 'No reason provided';
+  await t.kick(`${m.author.tag}: ${r}`).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  const e = okE('👢 Member Kicked').addFields({ name: 'User', value: `${t.user.tag}`, inline: true }, { name: 'Moderator', value: m.author.tag, inline: true }, { name: 'Reason', value: r });
+  m.reply({ embeds: [e] }); sendLog(m.guild, KICK_LOG_CHANNEL_ID, e);
+}};
+commands.mute = { cat: 'Moderation', desc: 'Timeout (mute) a member', usage: 'mute <@user> <10m|1h> [reason]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ModerateMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); if (!t) return m.reply({ embeds: [errE('Member not found.')] });
+  const dur = parseDur(a[1]); if (!dur) return m.reply({ embeds: [errE('Duration invalid. Use s/m/h/d. Example: 10m')] });
+  if (!t.moderatable) return m.reply({ embeds: [errE('Hierarchy prevents timeout.')] });
+  const r = a.slice(2).join(' ') || 'No reason provided';
+  await t.timeout(dur, `${m.author.tag}: ${r}`).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  const e = okE('🔇 Member Muted').addFields({ name: 'User', value: `${t.user.tag}`, inline: true }, { name: 'Duration', value: fmtDur(dur), inline: true }, { name: 'Moderator', value: m.author.tag, inline: true }, { name: 'Reason', value: r });
+  m.reply({ embeds: [e] }); sendLog(m.guild, MUTE_LOG_CHANNEL_ID, e);
+}};
+commands.unmute = { cat: 'Moderation', desc: 'Remove timeout', usage: 'unmute <@user>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ModerateMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); if (!t) return m.reply({ embeds: [errE('Member not found.')] });
+  await t.timeout(null, `unmute by ${m.author.tag}`).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  const e = okE('🔊 Member Unmuted', `${t.user.tag} has been unmuted by ${m.author}.`);
+  m.reply({ embeds: [e] }); sendLog(m.guild, MUTE_LOG_CHANNEL_ID, e);
+}};
+commands.timeout = commands.mute;
+commands.untimeout = commands.unmute;
+commands.warn = { cat: 'Moderation', desc: 'Warn a member', usage: 'warn <@user> [reason]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ModerateMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); if (!t) return m.reply({ embeds: [errE('Member not found.')] });
+  const r = a.slice(1).join(' ') || 'No reason provided';
+  const list = warnings.get(t.id) || []; list.push({ mod: m.author.tag, reason: r, ts: Date.now() }); warnings.set(t.id, list);
+  const e = okE('⚠️ Warned').addFields({ name: 'User', value: t.user.tag, inline: true }, { name: 'Moderator', value: m.author.tag, inline: true }, { name: 'Total', value: `${list.length}`, inline: true }, { name: 'Reason', value: r });
+  m.reply({ embeds: [e] });
+}};
+commands.warnings = { cat: 'Moderation', desc: 'List warnings for a member', usage: 'warnings <@user>', async run(m, a) {
+  const u = await resolveUser(m, a[0]); if (!u) return m.reply({ embeds: [errE('User not found.')] });
+  const list = warnings.get(u.id) || [];
+  if (!list.length) return m.reply({ embeds: [infoE('No Warnings', `${u.tag} has no warnings.`)] });
+  const e = infoE(`Warnings for ${u.tag}`).setDescription(list.map((w, i) => `**#${i+1}** — ${w.reason} *by ${w.mod}* <t:${Math.floor(w.ts/1000)}:R>`).join('\n'));
+  m.reply({ embeds: [e] });
+}};
+commands.clearwarns = { cat: 'Moderation', desc: 'Clear warnings for a member', usage: 'clearwarns <@user>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ModerateMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const u = await resolveUser(m, a[0]); if (!u) return m.reply({ embeds: [errE('User not found.')] });
+  warnings.delete(u.id);
+  m.reply({ embeds: [okE('✅ Cleared', `Warnings for ${u.tag} were cleared.`)] });
+}};
+commands.purge = { cat: 'Moderation', desc: 'Delete N messages', usage: 'purge <1-100>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageMessages)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const n = Math.min(Math.max(parseInt(a[0]) || 0, 1), 100);
+  const del = await m.channel.bulkDelete(n, true).catch(e => { m.reply({ embeds: [errE('Failed', e.message)] }); return null; });
+  if (del) m.channel.send({ embeds: [okE('🧹 Purged', `Deleted **${del.size}** messages.`)] }).then(msg => setTimeout(() => msg.delete().catch(()=>{}), 4000));
+}};
+commands.clear = commands.purge;
+commands.slowmode = { cat: 'Moderation', desc: 'Set channel slowmode', usage: 'slowmode <seconds>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const s = Math.min(Math.max(parseInt(a[0]) || 0, 0), 21600);
+  await m.channel.setRateLimitPerUser(s).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  m.reply({ embeds: [okE('⏱️ Slowmode', `Set to **${s}s**.`)] });
+}};
+commands.lock = { cat: 'Moderation', desc: 'Lock a channel', usage: 'lock [#channel]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const ch = m.mentions.channels.first() || m.channel;
+  await ch.permissionOverwrites.edit(m.guild.roles.everyone, { SendMessages: false }).catch(()=>{});
+  m.reply({ embeds: [okE('🔒 Locked', `${ch} locked.`)] });
+}};
+commands.unlock = { cat: 'Moderation', desc: 'Unlock a channel', usage: 'unlock [#channel]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const ch = m.mentions.channels.first() || m.channel;
+  await ch.permissionOverwrites.edit(m.guild.roles.everyone, { SendMessages: null }).catch(()=>{});
+  m.reply({ embeds: [okE('🔓 Unlocked', `${ch} unlocked.`)] });
+}};
+commands.lockall = { cat: 'Moderation', desc: 'Lock every text channel', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  let n = 0;
+  for (const [, ch] of m.guild.channels.cache) if (ch.isTextBased()) { await ch.permissionOverwrites.edit(m.guild.roles.everyone, { SendMessages: false }).catch(()=>{}); n++; }
+  m.reply({ embeds: [okE('🔒 Locked', `Locked **${n}** channels.`)] });
+}};
+commands.unlockall = { cat: 'Moderation', desc: 'Unlock every text channel', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  let n = 0;
+  for (const [, ch] of m.guild.channels.cache) if (ch.isTextBased()) { await ch.permissionOverwrites.edit(m.guild.roles.everyone, { SendMessages: null }).catch(()=>{}); n++; }
+  m.reply({ embeds: [okE('🔓 Unlocked', `Unlocked **${n}** channels.`)] });
+}};
+commands.softban = { cat: 'Moderation', desc: 'Ban then unban (deletes messages)', usage: 'softban <@user> [reason]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.BanMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); if (!t) return m.reply({ embeds: [errE('Member not found.')] });
+  const r = a.slice(1).join(' ') || 'Softban';
+  try { await m.guild.bans.create(t.id, { reason: r, deleteMessageSeconds: 604800 }); await m.guild.bans.remove(t.id); m.reply({ embeds: [okE('🧹 Softbanned', `${t.user.tag}`)] }); }
+  catch (e) { m.reply({ embeds: [errE('Failed', e.message)] }); }
+}};
+commands.hackban = { cat: 'Moderation', desc: 'Ban a user by ID (not in server)', usage: 'hackban <id> [reason]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.BanMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  if (!a[0]) return m.reply({ embeds: [errE('Provide user ID.')] });
+  try { await m.guild.bans.create(a[0], { reason: a.slice(1).join(' ') || 'Hackban' }); m.reply({ embeds: [okE('🔨 Hackbanned', `\`${a[0]}\``)] }); }
+  catch (e) { m.reply({ embeds: [errE('Failed', e.message)] }); }
+}};
+commands.massban = { cat: 'Moderation', desc: 'Ban multiple users by IDs', usage: 'massban <id1,id2,id3> [reason]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.BanMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const ids = (a[0] || '').split(',').map(x => x.trim()).filter(Boolean);
+  if (!ids.length) return m.reply({ embeds: [errE('Provide comma-separated IDs.')] });
+  let ok = 0, fail = 0;
+  for (const id of ids) { try { await m.guild.bans.create(id, { reason: a.slice(1).join(' ') || 'Massban' }); ok++; } catch { fail++; } }
+  m.reply({ embeds: [okE('Massban done', `✅ ${ok} banned • ❌ ${fail} failed.`)] });
+}};
 
-function isReviewer(member) {
-    if (!member) return false;
-    if (reviewerRolesArray.length === 0) return false;
-    return reviewerRolesArray.some(roleId => member.roles.cache.has(roleId));
-}
+/* ---------- MEMBER MANAGEMENT (20) ---------- */
+commands.userinfo = { cat: 'Members', desc: 'Show info about a user', usage: 'userinfo [@user]', async run(m, a) {
+  const u = await resolveUser(m, a[0]) || m.author;
+  const mem = await m.guild.members.fetch(u.id).catch(()=>null);
+  const e = infoE(`👤 ${u.tag}`).setThumbnail(u.displayAvatarURL({ size: 256 })).addFields(
+    { name: 'ID', value: u.id, inline: true },
+    { name: 'Bot', value: u.bot ? 'Yes' : 'No', inline: true },
+    { name: 'Created', value: `<t:${Math.floor(u.createdTimestamp/1000)}:R>`, inline: true });
+  if (mem) e.addFields(
+    { name: 'Joined', value: `<t:${Math.floor(mem.joinedTimestamp/1000)}:R>`, inline: true },
+    { name: 'Roles', value: mem.roles.cache.filter(r => r.id !== m.guild.id).map(r => r.toString()).join(', ') || 'None' });
+  m.reply({ embeds: [e] });
+}};
+commands.serverinfo = { cat: 'Members', desc: 'Show server information', async run(m) {
+  const g = m.guild;
+  const e = infoE(`📊 ${g.name}`).setThumbnail(g.iconURL({ size: 256 }) || null).addFields(
+    { name: 'Owner', value: `<@${g.ownerId}>`, inline: true },
+    { name: 'Members', value: `${g.memberCount}`, inline: true },
+    { name: 'Channels', value: `${g.channels.cache.size}`, inline: true },
+    { name: 'Roles', value: `${g.roles.cache.size}`, inline: true },
+    { name: 'Boosts', value: `${g.premiumSubscriptionCount || 0}`, inline: true },
+    { name: 'Created', value: `<t:${Math.floor(g.createdTimestamp/1000)}:R>`, inline: true },
+    { name: 'ID', value: g.id });
+  m.reply({ embeds: [e] });
+}};
+commands.avatar = { cat: 'Members', desc: 'Show avatar', usage: 'avatar [@user]', async run(m, a) {
+  const u = await resolveUser(m, a[0]) || m.author;
+  const e = infoE(`🖼️ ${u.tag}'s avatar`).setImage(u.displayAvatarURL({ size: 1024 }));
+  m.reply({ embeds: [e] });
+}};
+commands.banner = { cat: 'Members', desc: 'Show banner', usage: 'banner [@user]', async run(m, a) {
+  const u = await resolveUser(m, a[0]) || m.author;
+  const full = await client.users.fetch(u.id, { force: true });
+  if (!full.banner) return m.reply({ embeds: [errE('No banner.')] });
+  m.reply({ embeds: [infoE(`🖼️ ${u.tag}'s banner`).setImage(full.bannerURL({ size: 1024 }))] });
+}};
+commands.membercount = { cat: 'Members', desc: 'Show member count', async run(m) {
+  m.reply({ embeds: [infoE('👥 Members', `**${m.guild.memberCount}** members.`)] });
+}};
+commands.roleinfo = { cat: 'Members', desc: 'Show role info', usage: 'roleinfo <@role>', async run(m, a) {
+  const r = m.mentions.roles.first() || m.guild.roles.cache.get(a[0]) || m.guild.roles.cache.find(x => x.name.toLowerCase() === (a[0]||'').toLowerCase());
+  if (!r) return m.reply({ embeds: [errE('Role not found.')] });
+  m.reply({ embeds: [infoE(`🏷️ ${r.name}`).addFields(
+    { name: 'ID', value: r.id, inline: true }, { name: 'Color', value: r.hexColor, inline: true },
+    { name: 'Members', value: `${r.members.size}`, inline: true }, { name: 'Position', value: `${r.position}`, inline: true })] });
+}};
+commands.roles = { cat: 'Members', desc: 'List all roles', async run(m) {
+  const list = m.guild.roles.cache.sort((a,b)=>b.position-a.position).map(r => r.toString()).join(' ');
+  const e = infoE('🏷️ Roles').setDescription(list.slice(0, 4000));
+  m.reply({ embeds: [e] });
+}};
+commands.nickname = { cat: 'Members', desc: 'Change nickname', usage: 'nickname <@user> <name>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageNicknames)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); if (!t) return m.reply({ embeds: [errE('Member not found.')] });
+  const nn = a.slice(1).join(' ').slice(0, 32) || null;
+  await t.setNickname(nn, `by ${m.author.tag}`).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  m.reply({ embeds: [okE('✏️ Nickname updated')] });
+}};
+commands.resetnick = { cat: 'Members', desc: 'Reset nickname', usage: 'resetnick <@user>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageNicknames)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); if (!t) return m.reply({ embeds: [errE('Not found.')] });
+  await t.setNickname(null).catch(()=>{});
+  m.reply({ embeds: [okE('↩️ Nickname reset')] });
+}};
+commands.addrole = { cat: 'Members', desc: 'Add role to member', usage: 'addrole <@user> <@role>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageRoles)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); const r = m.mentions.roles.first();
+  if (!t || !r) return m.reply({ embeds: [errE('Usage: addrole @user @role')] });
+  await t.roles.add(r).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  m.reply({ embeds: [okE('✅ Role added', `${r} → ${t.user.tag}`)] });
+}};
+commands.removerole = { cat: 'Members', desc: 'Remove role from member', usage: 'removerole <@user> <@role>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageRoles)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); const r = m.mentions.roles.first();
+  if (!t || !r) return m.reply({ embeds: [errE('Usage: removerole @user @role')] });
+  await t.roles.remove(r).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  m.reply({ embeds: [okE('✅ Role removed', `${r} ✖ ${t.user.tag}`)] });
+}};
+commands.createrole = { cat: 'Members', desc: 'Create a role', usage: 'createrole <name>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageRoles)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const name = a.join(' '); if (!name) return m.reply({ embeds: [errE('Provide a name.')] });
+  const r = await m.guild.roles.create({ name }).catch(e => { m.reply({ embeds: [errE('Failed', e.message)] }); return null; });
+  if (r) m.reply({ embeds: [okE('✅ Role created', r.toString())] });
+}};
+commands.deleterole = { cat: 'Members', desc: 'Delete a role', usage: 'deleterole <@role>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageRoles)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const r = m.mentions.roles.first(); if (!r) return m.reply({ embeds: [errE('Mention a role.')] });
+  await r.delete().catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  m.reply({ embeds: [okE('🗑️ Role deleted')] });
+}};
+commands.roleall = { cat: 'Members', desc: 'Give a role to all members', usage: 'roleall <@role>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  const r = m.mentions.roles.first(); if (!r) return m.reply({ embeds: [errE('Mention a role.')] });
+  const members = await m.guild.members.fetch();
+  let n = 0; for (const [, mem] of members) if (!mem.user.bot) { await mem.roles.add(r).catch(()=>{}); n++; }
+  m.reply({ embeds: [okE('✅ Done', `${n} members got ${r}.`)] });
+}};
+commands.rolehumans = { cat: 'Members', desc: 'Give role to all humans', usage: 'rolehumans <@role>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  const r = m.mentions.roles.first(); if (!r) return m.reply({ embeds: [errE('Mention a role.')] });
+  const members = await m.guild.members.fetch();
+  let n = 0; for (const [, mem] of members) if (!mem.user.bot) { await mem.roles.add(r).catch(()=>{}); n++; }
+  m.reply({ embeds: [okE('✅ Done', `${n} humans got ${r}.`)] });
+}};
+commands.rolebots = { cat: 'Members', desc: 'Give role to all bots', usage: 'rolebots <@role>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  const r = m.mentions.roles.first(); if (!r) return m.reply({ embeds: [errE('Mention a role.')] });
+  const members = await m.guild.members.fetch();
+  let n = 0; for (const [, mem] of members) if (mem.user.bot) { await mem.roles.add(r).catch(()=>{}); n++; }
+  m.reply({ embeds: [okE('✅ Done', `${n} bots got ${r}.`)] });
+}};
+commands.move = { cat: 'Members', desc: 'Move member to another voice channel', usage: 'move <@user> <#voice>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.MoveMembers)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = await resolveMember(m, a[0]); const ch = m.mentions.channels.first();
+  if (!t || !ch) return m.reply({ embeds: [errE('Usage: move @user #voice')] });
+  await t.voice.setChannel(ch).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  m.reply({ embeds: [okE('➡️ Moved', `${t.user.tag} → ${ch}`)] });
+}};
+commands.afk = { cat: 'Members', desc: 'Set yourself AFK', usage: 'afk [reason]', async run(m, a) {
+  afks.set(m.author.id, a.join(' ') || 'AFK');
+  m.reply({ embeds: [okE('💤 AFK set', `You are now AFK: **${afks.get(m.author.id)}**`)] });
+}};
+commands.afklist = { cat: 'Members', desc: 'List AFK users', async run(m) {
+  if (!afks.size) return m.reply({ embeds: [infoE('No one is AFK.')] });
+  const list = [...afks.entries()].map(([id, r]) => `<@${id}> — ${r}`).join('\n');
+  m.reply({ embeds: [infoE('💤 AFK List').setDescription(list)] });
+}};
+commands.whois = commands.userinfo;
 
-function getSupportRoleMention() {
-    if (SUPPORT_ROLE_ID) return `<@&${SUPPORT_ROLE_ID}>`;
-    return "";
-}
+/* ---------- LOGS & SECURITY (10) ---------- */
+commands.logs = { cat: 'Security', desc: 'Show current log config', async run(m) {
+  m.reply({ embeds: [infoE('📜 Logs Config').addFields(
+    { name: 'Role Logs', value: ROLE_LOG_CHANNEL_ID ? `<#${ROLE_LOG_CHANNEL_ID}>` : 'Not set' },
+    { name: 'Mute Logs', value: MUTE_LOG_CHANNEL_ID ? `<#${MUTE_LOG_CHANNEL_ID}>` : 'Not set' },
+    { name: 'Ban Logs', value: BAN_LOG_CHANNEL_ID ? `<#${BAN_LOG_CHANNEL_ID}>` : 'Not set' },
+    { name: 'Kick Logs', value: KICK_LOG_CHANNEL_ID ? `<#${KICK_LOG_CHANNEL_ID}>` : 'Not set' },
+    { name: 'General Logs', value: GENERAL_LOG_CHANNEL_ID ? `<#${GENERAL_LOG_CHANNEL_ID}>` : 'Not set' })] });
+}};
+commands.setlogs = { cat: 'Security', desc: 'Set general log channel (runtime only)', usage: 'setlogs #channel', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  const ch = m.mentions.channels.first(); if (!ch) return m.reply({ embeds: [errE('Mention a channel.')] });
+  settings.logs = ch.id;
+  m.reply({ embeds: [okE('✅ Logs channel set', `${ch} (runtime only — set env for persistence).`)] });
+}};
+commands.audit = { cat: 'Security', desc: 'Show last audit log entries', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.ViewAuditLog)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const logs = await m.guild.fetchAuditLogs({ limit: 10 }).catch(()=>null);
+  if (!logs) return m.reply({ embeds: [errE('Failed to fetch.')] });
+  const list = logs.entries.map(e => `**${e.action}** — ${e.executor?.tag || 'Unknown'} → ${e.target?.tag || e.targetId || ''} <t:${Math.floor(e.createdTimestamp/1000)}:R>`).join('\n');
+  m.reply({ embeds: [infoE('📋 Recent Audit').setDescription(list || 'Empty')] });
+}};
+commands.modlogs = commands.audit;
+commands.antispam = { cat: 'Security', desc: 'Toggle anti-spam', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  settings.antispam = !settings.antispam;
+  m.reply({ embeds: [okE('🛡️ Anti-spam', `Now: **${settings.antispam ? 'ON' : 'OFF'}**`)] });
+}};
+commands.antiinvite = { cat: 'Security', desc: 'Toggle anti-invite', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  settings.antiinvite = !settings.antiinvite;
+  m.reply({ embeds: [okE('🛡️ Anti-invite', `Now: **${settings.antiinvite ? 'ON' : 'OFF'}**`)] });
+}};
+commands.antiraid = { cat: 'Security', desc: 'Toggle anti-raid', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  settings.antiraid = !settings.antiraid;
+  m.reply({ embeds: [okE('🛡️ Anti-raid', `Now: **${settings.antiraid ? 'ON' : 'OFF'}**`)] });
+}};
+commands.antimention = { cat: 'Security', desc: 'Toggle anti-mention', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  settings.antimention = !settings.antimention;
+  m.reply({ embeds: [okE('🛡️ Anti-mention', `Now: **${settings.antimention ? 'ON' : 'OFF'}**`)] });
+}};
+commands.automod = { cat: 'Security', desc: 'Toggle basic automod (bad words)', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.Administrator)) return m.reply({ embeds: [errE('❌ Admin only.')] });
+  settings.automod = !settings.automod;
+  m.reply({ embeds: [okE('🛡️ Automod', `Now: **${settings.automod ? 'ON' : 'OFF'}**`)] });
+}};
+commands.security = { cat: 'Security', desc: 'Show current security status', async run(m) {
+  m.reply({ embeds: [infoE('🛡️ Security Status').addFields(
+    { name: 'Anti-spam', value: settings.antispam ? '✅' : '❌', inline: true },
+    { name: 'Anti-invite', value: settings.antiinvite ? '✅' : '❌', inline: true },
+    { name: 'Anti-raid', value: settings.antiraid ? '✅' : '❌', inline: true },
+    { name: 'Anti-mention', value: settings.antimention ? '✅' : '❌', inline: true },
+    { name: 'Automod', value: settings.automod ? '✅' : '❌', inline: true })] });
+}};
 
-function getTicketAccessRoles() {
-    const roles = [];
-    if (SUPPORT_ROLE_ID) roles.push(SUPPORT_ROLE_ID);
-    roles.push(...staffRolesArray);
-    return roles;
-}
+/* ---------- UTILITY (20) ---------- */
+commands.help = { cat: 'Utility', desc: 'List commands', usage: 'help [command]', async run(m, a) {
+  if (a[0]) {
+    const c = commands[a[0].toLowerCase()];
+    if (!c) return m.reply({ embeds: [errE('Command not found.')] });
+    return m.reply({ embeds: [infoE(`📖 ${PREFIX}${a[0]}`).addFields(
+      { name: 'Category', value: c.cat, inline: true },
+      { name: 'Usage', value: c.usage || `${PREFIX}${a[0]}`, inline: true },
+      { name: 'Description', value: c.desc || 'No description' })] });
+  }
+  const cats = {};
+  for (const [n, c] of Object.entries(commands)) { (cats[c.cat] = cats[c.cat] || []).push(`\`${PREFIX}${n}\``); }
+  const e = infoE('📖 Command List');
+  for (const [cat, list] of Object.entries(cats)) e.addFields({ name: cat, value: list.join(', ').slice(0, 1020) });
+  m.reply({ embeds: [e] });
+}};
+commands.ping = { cat: 'Utility', desc: 'Show latency', async run(m) {
+  const sent = await m.reply('🏓 Pinging...');
+  sent.edit({ content: null, embeds: [okE('🏓 Pong!', `Gateway: **${client.ws.ping}ms**\nRoundtrip: **${sent.createdTimestamp - m.createdTimestamp}ms**`)] });
+}};
+commands.uptime = { cat: 'Utility', desc: 'Show bot uptime', async run(m) {
+  m.reply({ embeds: [infoE('⏱️ Uptime', fmtDur(client.uptime))] });
+}};
+commands.botinfo = { cat: 'Utility', desc: 'Bot information', async run(m) {
+  m.reply({ embeds: [infoE('🤖 Bot Info').addFields(
+    { name: 'Tag', value: client.user.tag, inline: true },
+    { name: 'Guilds', value: `${client.guilds.cache.size}`, inline: true },
+    { name: 'Uptime', value: fmtDur(client.uptime), inline: true },
+    { name: 'Node', value: process.version, inline: true },
+    { name: 'discord.js', value: require('discord.js').version, inline: true })] });
+}};
+commands.invite = { cat: 'Utility', desc: 'Get bot invite link', async run(m) {
+  const url = `https://discord.com/api/oauth2/authorize?client_id=${client.user.id}&permissions=8&scope=bot%20applications.commands`;
+  m.reply({ embeds: [infoE('🔗 Invite Link', url)] });
+}};
+commands.poll = { cat: 'Utility', desc: 'Create a poll', usage: 'poll Question? | option1 | option2', async run(m, a) {
+  const [q, ...opts] = a.join(' ').split('|').map(s => s.trim());
+  if (!q || !opts.length) return m.reply({ embeds: [errE('Usage: poll Question? | opt1 | opt2')] });
+  const nums = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
+  const e = infoE(`📊 ${q}`).setDescription(opts.map((o, i) => `${nums[i]} ${o}`).join('\n'));
+  const msg = await m.channel.send({ embeds: [e] });
+  for (let i = 0; i < Math.min(opts.length, 10); i++) await msg.react(nums[i]);
+}};
+commands.say = { cat: 'Utility', desc: 'Make the bot say something', usage: 'say <text>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageMessages)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = a.join(' '); if (!t) return;
+  m.delete().catch(()=>{}); m.channel.send(t);
+}};
+commands.embed = { cat: 'Utility', desc: 'Send an embed', usage: 'embed Title | Description', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageMessages)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const [title, ...rest] = a.join(' ').split('|');
+  m.channel.send({ embeds: [infoE((title||'').trim(), rest.join('|').trim())] });
+}};
+commands.msg = { cat: 'Utility', desc: 'Create & send a message (channel or DM)', usage: 'msg create <name>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageMessages)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  if (a[0] !== 'create' || !a[1]) return m.reply({ embeds: [errE('Usage: !msg create <name>')] });
+  const name = a[1];
+  await m.reply({ embeds: [infoE('✍️ Send the message content', 'Type `cancel` to abort. (60s)')] });
+  const filter = x => x.author.id === m.author.id && x.channel.id === m.channel.id;
+  let content;
+  try { const coll = await m.channel.awaitMessages({ filter, max: 1, time: 60000, errors: ['time'] }); content = coll.first().content; }
+  catch { return m.reply({ embeds: [errE('⏰ Timed out.')] }); }
+  if (content.toLowerCase() === 'cancel') return m.reply({ embeds: [infoE('❌ Cancelled.')] });
+  await m.reply({ embeds: [infoE('📍 Where?', '`channel` = this channel, `#mention` = specific, `dm` = DM members')] });
+  let where;
+  try { const coll = await m.channel.awaitMessages({ filter, max: 1, time: 60000, errors: ['time'] }); where = coll.first(); }
+  catch { return m.reply({ embeds: [errE('⏰ Timed out.')] }); }
+  const target = where.content.trim();
+  if (target === 'channel') {
+    await m.channel.send(content);
+    return m.reply({ embeds: [okE('✅ Sent', `Message **${name}** delivered to this channel.`)] });
+  }
+  if (target === 'dm') {
+    await m.reply({ embeds: [infoE('👥 Who?', 'Type `all`, `humans`, `bots`, or mention users. React ✅ to confirm.')] });
+    let tgt;
+    try { const coll = await m.channel.awaitMessages({ filter, max: 1, time: 60000, errors: ['time'] }); tgt = coll.first(); }
+    catch { return m.reply({ embeds: [errE('⏰ Timed out.')] }); }
+    let list = [];
+    if (tgt.content === 'all' || tgt.content === 'humans' || tgt.content === 'bots') {
+      const all = await m.guild.members.fetch();
+      list = [...all.values()].filter(x => x.id !== client.user.id && (tgt.content === 'all' || (tgt.content === 'humans' && !x.user.bot) || (tgt.content === 'bots' && x.user.bot)));
+    } else { list = tgt.mentions.members.map(x => x); }
+    if (!list.length) return m.reply({ embeds: [errE('No recipients.')] });
+    const confirm = await m.channel.send({ embeds: [infoE('⚠️ Confirm', `Send DM to **${list.length}** users? React ✅ within 30s.`)] });
+    await confirm.react('✅');
+    const r = await confirm.awaitReactions({ filter: (re, u) => re.emoji.name === '✅' && u.id === m.author.id, max: 1, time: 30000 }).catch(()=>null);
+    if (!r || !r.size) return m.reply({ embeds: [errE('Cancelled.')] });
+    let okN = 0, failN = 0;
+    for (const mem of list) { try { await mem.send(content); okN++; } catch { failN++; } await new Promise(r => setTimeout(r, 1200)); }
+    return m.reply({ embeds: [okE('✅ DM Campaign done', `Sent: **${okN}** • Failed: **${failN}**`)] });
+  }
+  const ch = m.mentions.channels.first();
+  if (ch) { await ch.send(content); return m.reply({ embeds: [okE('✅ Sent', `Delivered to ${ch}.`)] }); }
+  m.reply({ embeds: [errE('Unknown target.')] });
+}};
+commands.announce = { cat: 'Utility', desc: 'Send an announcement embed', usage: 'announce <text>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageMessages)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = a.join(' '); if (!t) return;
+  m.channel.send({ embeds: [infoE('📢 Announcement', t)] });
+}};
+commands.remind = { cat: 'Utility', desc: 'Set a reminder', usage: 'remind <10m> <text>', async run(m, a) {
+  const d = parseDur(a[0]); if (!d) return m.reply({ embeds: [errE('Usage: remind 10m take out trash')] });
+  const text = a.slice(1).join(' ') || 'Reminder!';
+  m.reply({ embeds: [okE('⏰ Reminder set', `In **${fmtDur(d)}**`)] });
+  setTimeout(() => m.author.send({ embeds: [infoE('⏰ Reminder', `${text}\nFrom ${m.guild.name}`)] }).catch(()=>{}), d);
+}};
+commands.translate = { cat: 'Utility', desc: 'Translate text', usage: 'translate <lang> <text>', async run(m, a) {
+  const lang = a[0]; const text = a.slice(1).join(' ');
+  if (!lang || !text) return m.reply({ embeds: [errE('Usage: translate es Hello world')] });
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(lang)}&dt=t&q=${encodeURIComponent(text)}`;
+    const res = await fetch(url); const data = await res.json();
+    const out = data[0].map(x => x[0]).join('');
+    m.reply({ embeds: [infoE('🌐 Translation').addFields({ name: 'Input', value: text }, { name: 'Output', value: out })] });
+  } catch { m.reply({ embeds: [errE('Translation failed.')] }); }
+}};
+commands.calculate = { cat: 'Utility', desc: 'Calculate a math expression', usage: 'calculate 2+2*3', async run(m, a) {
+  const expr = a.join(' ').replace(/[^0-9+\-*/(). %]/g, '');
+  if (!expr) return m.reply({ embeds: [errE('Usage: calculate <expression>')] });
+  try { const r = Function(`"use strict"; return (${expr});`)(); m.reply({ embeds: [okE('🧮 Result', `\`${expr}\` = **${r}**`)] }); }
+  catch { m.reply({ embeds: [errE('Invalid expression.')] }); }
+}};
+commands.choose = { cat: 'Utility', desc: 'Choose random from list', usage: 'choose a b c', async run(m, a) {
+  if (a.length < 2) return m.reply({ embeds: [errE('Give at least 2 options.')] });
+  m.reply({ embeds: [okE('🎲 I choose...', a[Math.floor(Math.random()*a.length)])] });
+}};
+commands.coinflip = { cat: 'Utility', desc: 'Flip a coin', async run(m) {
+  m.reply({ embeds: [okE('🪙 Coin', Math.random() < 0.5 ? 'Heads' : 'Tails')] });
+}};
+commands.roll = { cat: 'Utility', desc: 'Roll a dice (default 1-100)', usage: 'roll [NdN]', async run(m, a) {
+  const r = a[0] && a[0].match(/^(\d+)d(\d+)$/i);
+  if (r) { const n = parseInt(r[1]), s = parseInt(r[2]); let total = 0, rolls = [];
+    for (let i = 0; i < Math.min(n, 20); i++) { const v = Math.ceil(Math.random()*s); rolls.push(v); total += v; }
+    return m.reply({ embeds: [okE('🎲 Roll', `Rolls: ${rolls.join(', ')}\nTotal: **${total}**`)] }); }
+  m.reply({ embeds: [okE('🎲 Roll', `**${Math.ceil(Math.random()*100)}**`)] });
+}};
+commands['8ball'] = { cat: 'Utility', desc: 'Ask the magic 8-ball', usage: '8ball Will I win?', async run(m, a) {
+  const answers = ['Yes.','No.','Maybe.','Definitely.','Absolutely not.','Ask again later.','I doubt it.','For sure!','Very unlikely.','Signs point to yes.','Concentrate and ask again.'];
+  m.reply({ embeds: [infoE('🎱 8-Ball', `❓ ${a.join(' ') || '...'}\n💬 **${answers[Math.floor(Math.random()*answers.length)]}**`)] });
+}};
+commands.suggest = { cat: 'Utility', desc: 'Send a suggestion', usage: 'suggest <idea>', async run(m, a) {
+  const t = a.join(' '); if (!t) return m.reply({ embeds: [errE('Provide a suggestion.')] });
+  const ch = settings.logs ? m.guild.channels.cache.get(settings.logs) : null;
+  const target = ch || m.channel;
+  const e = infoE('💡 New Suggestion').setDescription(t).setFooter({ text: `By ${m.author.tag}` });
+  const msg = await target.send({ embeds: [e] });
+  await msg.react('👍'); await msg.react('👎');
+  if (target.id !== m.channel.id) m.reply({ embeds: [okE('✅ Suggestion sent', target.toString())] });
+}};
+commands.report = { cat: 'Utility', desc: 'Report a user', usage: 'report <@user> <reason>', async run(m, a) {
+  const t = await resolveUser(m, a[0]); const r = a.slice(1).join(' ');
+  if (!t || !r) return m.reply({ embeds: [errE('Usage: report @user reason')] });
+  const ch = settings.logs ? m.guild.channels.cache.get(settings.logs) : null;
+  if (ch) ch.send({ embeds: [errE('🚨 Report').addFields({ name: 'Reported', value: `${t.tag} (${t.id})` }, { name: 'By', value: `${m.author.tag} (${m.author.id})` }, { name: 'Reason', value: r })] });
+  m.reply({ embeds: [okE('✅ Reported', 'Staff will review it.')] });
+}};
+commands.servericon = { cat: 'Utility', desc: 'Show server icon', async run(m) {
+  if (!m.guild.iconURL()) return m.reply({ embeds: [errE('No icon.')] });
+  m.reply({ embeds: [infoE('🖼️ Server Icon').setImage(m.guild.iconURL({ size: 1024 }))] });
+}};
 
-function getTicketPermissionOverwrites() {
-    const roleIds = getTicketAccessRoles();
-    return roleIds.map(roleId => ({ 
-        id: roleId, 
-        allow: [
-            PermissionFlagsBits.ViewChannel, 
-            PermissionFlagsBits.SendMessages, 
-            PermissionFlagsBits.ReadMessageHistory, 
-            PermissionFlagsBits.AttachFiles,
-            PermissionFlagsBits.AddReactions,
-            PermissionFlagsBits.UseExternalEmojis
-        ] 
-    }));
-}
+/* ---------- CHANNEL MANAGEMENT (10) ---------- */
+commands.createchannel = { cat: 'Channels', desc: 'Create a text channel', usage: 'createchannel <name>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const name = a.join('-').toLowerCase(); if (!name) return m.reply({ embeds: [errE('Provide a name.')] });
+  const ch = await m.guild.channels.create({ name, type: ChannelType.GuildText }).catch(e => { m.reply({ embeds: [errE('Failed', e.message)] }); return null; });
+  if (ch) m.reply({ embeds: [okE('✅ Created', ch.toString())] });
+}};
+commands.deletechannel = { cat: 'Channels', desc: 'Delete a channel', usage: 'deletechannel [#channel]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const ch = m.mentions.channels.first() || m.channel;
+  await ch.delete().catch(()=>{});
+}};
+commands.renamechannel = { cat: 'Channels', desc: 'Rename a channel', usage: 'renamechannel [#channel] <name>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const ch = m.mentions.channels.first() || m.channel;
+  const name = a.filter(x => !x.startsWith('<#')).join('-').toLowerCase();
+  if (!name) return m.reply({ embeds: [errE('Provide a name.')] });
+  await ch.setName(name).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  m.reply({ embeds: [okE('✏️ Renamed', ch.toString())] });
+}};
+commands.topic = { cat: 'Channels', desc: 'Set channel topic', usage: 'topic <text>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const t = a.join(' ').slice(0, 1024);
+  await m.channel.setTopic(t).catch(e => m.reply({ embeds: [errE('Failed', e.message)] }));
+  m.reply({ embeds: [okE('📝 Topic updated')] });
+}};
+commands.hide = { cat: 'Channels', desc: 'Hide channel from @everyone', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  await m.channel.permissionOverwrites.edit(m.guild.roles.everyone, { ViewChannel: false }).catch(()=>{});
+  m.reply({ embeds: [okE('🙈 Hidden')] });
+}};
+commands.unhide = { cat: 'Channels', desc: 'Unhide channel', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  await m.channel.permissionOverwrites.edit(m.guild.roles.everyone, { ViewChannel: null }).catch(()=>{});
+  m.reply({ embeds: [okE('👁️ Unhidden')] });
+}};
+commands.clonechannel = { cat: 'Channels', desc: 'Clone a channel', usage: 'clonechannel [#channel]', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const ch = m.mentions.channels.first() || m.channel;
+  const c = await ch.clone().catch(e => { m.reply({ embeds: [errE('Failed', e.message)] }); return null; });
+  if (c) m.reply({ embeds: [okE('✅ Cloned', c.toString())] });
+}};
+commands.channelinfo = { cat: 'Channels', desc: 'Show channel info', async run(m, a) {
+  const ch = m.mentions.channels.first() || m.channel;
+  m.reply({ embeds: [infoE(`📁 #${ch.name}`).addFields(
+    { name: 'ID', value: ch.id, inline: true },
+    { name: 'Type', value: `${ch.type}`, inline: true },
+    { name: 'Created', value: `<t:${Math.floor(ch.createdTimestamp/1000)}:R>`, inline: true },
+    { name: 'Topic', value: ch.topic || '*None*' })] });
+}};
+commands.listchannels = { cat: 'Channels', desc: 'List all channels', async run(m) {
+  const list = m.guild.channels.cache.map(c => `${c.type === ChannelType.GuildVoice ? '🔊' : '#'} ${c.name}`).join('\n').slice(0, 4000);
+  m.reply({ embeds: [infoE('📋 Channels').setDescription(list || 'None')] });
+}};
+commands.nuke = { cat: 'Channels', desc: 'Nuke (recreate) a channel', async run(m) {
+  if (!has(m.member, PermissionFlagsBits.ManageChannels)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const pos = m.channel.position;
+  const clone = await m.channel.clone().catch(()=>null);
+  if (clone) { await m.channel.delete().catch(()=>{}); clone.setPosition(pos).catch(()=>{}); clone.send({ embeds: [okE('💥 Nuked')] }); }
+}};
 
-async function safeChannelBulkDelete(channel, limit = 10) {
-    try {
-        const messages = await channel.messages.fetch({ limit });
-        if (messages.size === 0) return;
-        
-        const filteredMessages = messages.filter(msg => Date.now() - msg.createdTimestamp < 1209600000);
-        
-        if (filteredMessages.size > 0) {
-            await channel.bulkDelete(filteredMessages);
-        }
-        
-        for (const msg of messages.filter(msg => Date.now() - msg.createdTimestamp >= 1209600000).values()) {
-            await msg.delete().catch(() => {});
-        }
-    } catch (error) {
-        console.error(`Bulk delete error: ${error.message}`);
-        const messages = await channel.messages.fetch({ limit }).catch(() => []);
-        for (const msg of messages) {
-            await msg.delete().catch(() => {});
-        }
-    }
-}
+/* ---------- FUN & COMMUNITY (10) ---------- */
+commands.meme = { cat: 'Fun', desc: 'Random meme', async run(m) {
+  try { const r = await fetch('https://meme-api.com/gimme').then(x => x.json());
+    m.reply({ embeds: [infoE(r.title).setImage(r.url).setFooter({ text: `r/${r.subreddit}` })] });
+  } catch { m.reply({ embeds: [errE('Meme API unavailable.')] }); }
+}};
+commands.joke = { cat: 'Fun', desc: 'Random joke', async run(m) {
+  try { const r = await fetch('https://official-joke-api.appspot.com/random_joke').then(x => x.json());
+    m.reply({ embeds: [infoE('😂 Joke', `${r.setup}\n\n||${r.punchline}||`)] });
+  } catch { m.reply({ embeds: [errE('Joke API unavailable.')] }); }
+}};
+commands.ship = { cat: 'Fun', desc: 'Ship two users', usage: 'ship @a @b', async run(m, a) {
+  const u1 = m.mentions.users.first() || m.author;
+  const u2 = m.mentions.users.at(1) || (await resolveUser(m, a[1])) || m.author;
+  const pct = Math.floor(Math.random()*101);
+  const bar = '█'.repeat(Math.round(pct/10)) + '░'.repeat(10 - Math.round(pct/10));
+  m.reply({ embeds: [infoE('💞 Ship', `${u1} + ${u2}\n\n\`${bar}\` **${pct}%**`)] });
+}};
+commands.rank = { cat: 'Fun', desc: 'Show your level', async run(m) {
+  const e = eco(m.author.id);
+  const level = Math.floor(Math.sqrt(e.msgs / 5));
+  m.reply({ embeds: [infoE(`⭐ ${m.author.username}'s Rank`).addFields(
+    { name: 'Level', value: `${level}`, inline: true },
+    { name: 'XP', value: `${e.msgs}`, inline: true })] });
+}};
+commands.rep = { cat: 'Fun', desc: 'Give reputation to a user', usage: 'rep @user', async run(m, a) {
+  const t = await resolveUser(m, a[0]); if (!t) return m.reply({ embeds: [errE('Mention a user.')] });
+  if (t.id === m.author.id) return m.reply({ embeds: [errE("Can't rep yourself.")] });
+  eco(t.id).rep++;
+  m.reply({ embeds: [okE('⭐ Rep given', `${t.tag} now has **${eco(t.id).rep}** rep.`)] });
+}};
+commands.daily = { cat: 'Fun', desc: 'Claim daily coins', async run(m) {
+  const e = eco(m.author.id); const now = Date.now();
+  if (now - e.daily < 86400000) return m.reply({ embeds: [errE('Already claimed.', `Next in ${fmtDur(86400000 - (now - e.daily))}`)] });
+  e.daily = now; e.balance += 250;
+  m.reply({ embeds: [okE('💰 Daily claimed!', `+250 coins • Balance: **${e.balance}**`)] });
+}};
+commands.balance = { cat: 'Fun', desc: 'Show your balance', async run(m, a) {
+  const u = await resolveUser(m, a[0]) || m.author;
+  m.reply({ embeds: [infoE('💰 Balance', `${u.tag} — **${eco(u.id).balance}** coins`)] });
+}};
+commands.leaderboard = { cat: 'Fun', desc: 'Top balances', async run(m) {
+  const top = [...economy.entries()].sort((a, b) => b[1].balance - a[1].balance).slice(0, 10);
+  const desc = top.map(([id, d], i) => `**#${i+1}** <@${id}> — ${d.balance}`).join('\n') || 'Empty';
+  m.reply({ embeds: [infoE('🏆 Leaderboard').setDescription(desc)] });
+}};
+commands.profile = { cat: 'Fun', desc: 'Show your profile card', async run(m) {
+  const e = eco(m.author.id); const lvl = Math.floor(Math.sqrt(e.msgs / 5));
+  m.reply({ embeds: [infoE(`👤 ${m.author.username}`).setThumbnail(m.author.displayAvatarURL()).addFields(
+    { name: 'Level', value: `${lvl}`, inline: true },
+    { name: 'XP', value: `${e.msgs}`, inline: true },
+    { name: 'Balance', value: `${e.balance}`, inline: true },
+    { name: 'Rep', value: `${e.rep}`, inline: true })] });
+}};
+commands.giveaway = { cat: 'Fun', desc: 'Start a quick giveaway', usage: 'giveaway <duration> <prize>', async run(m, a) {
+  if (!has(m.member, PermissionFlagsBits.ManageMessages)) return m.reply({ embeds: [errE('❌ No permission.')] });
+  const d = parseDur(a[0]); const prize = a.slice(1).join(' ');
+  if (!d || !prize) return m.reply({ embeds: [errE('Usage: giveaway 1m Nitro')] });
+  const msg = await m.channel.send({ embeds: [infoE('🎉 GIVEAWAY!', `Prize: **${prize}**\nReact 🎉 to enter!`).setFooter({ text: `Ends in ${fmtDur(d)}` })] });
+  await msg.react('🎉');
+  setTimeout(async () => {
+    const reacted = await msg.reactions.cache.get('🎉').users.fetch().catch(()=>null);
+    const users = reacted ? reacted.filter(u => !u.bot) : null;
+    if (!users || !users.size) return msg.reply({ embeds: [errE('No winner — no one entered.')] });
+    const winner = users.random();
+    msg.reply({ embeds: [okE('🎉 Winner!', `${winner} won **${prize}**!`)] });
+  }, d);
+}};
 
-// ============================================
-// TICKET PANEL - MINECRAFT REPORT (LIKE THE IMAGE)
-// ============================================
-async function createMinecraftTicketPanel(channel) {
-    await safeChannelBulkDelete(channel, 10);
-    
-    const embed = new EmbedBuilder()
-        .setColor(0x2b2d31)
-        .setTitle("Bonbon Utilities | Cj & RCS crack か")
-        .setDescription(
-            `**Minecraft Support Tickets**\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `**Help**\n` +
-            `Press to open a ticket for general assistance\n\n` +
-            `**Report**\n` +
-            `Press to open a ticket to report a player or bug\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `2026 BONBON™. We are here to help you!`
-        )
-        .setFooter({ text: "Premium Support System • 24/7", iconURL: client.user.displayAvatarURL() })
-        .setTimestamp();
+/* ---------- MINECRAFT SMP (10) ---------- */
+commands.ip = { cat: 'SMP', desc: 'Show server IP', async run(m) {
+  m.reply({ embeds: [infoE('🖥️ Server IP', `\`\`\`\n${MC_SERVER_IP}\n\`\`\``)] });
+}};
+commands.serverstatus = { cat: 'SMP', desc: 'Check Minecraft server status', async run(m) {
+  try {
+    const r = await fetch(`https://api.mcsrvstat.us/3/${MC_SERVER_IP}`).then(x => x.json());
+    if (!r.online) return m.reply({ embeds: [errE('Server is offline.')] });
+    m.reply({ embeds: [infoE('🎮 Server Status').addFields(
+      { name: 'Online', value: `${r.players?.online ?? 0}/${r.players?.max ?? 0}`, inline: true },
+      { name: 'Version', value: r.version || 'Unknown', inline: true })] });
+  } catch { m.reply({ embeds: [errE('Status API unavailable.')] }); }
+}};
+commands.rules = { cat: 'SMP', desc: 'Show SMP rules', async run(m) {
+  m.reply({ embeds: [infoE('📜 𝑲𝒉𝒐𝒃𝒛𝒂 𝑺𝑴𝑷 Rules', [
+    '1. احترم جميع اللاعبين.',
+    '2. ممنوع الغش أو استخدام Hacks.',
+    '3. ممنوع Griefing أو Stealing.',
+    '4. لا للسبام أو الإعلانات.',
+    '5. التزم بتعليمات الـ Staff.',
+  ].join('\n'))] });
+}};
+commands.store = { cat: 'SMP', desc: 'Show store link', async run(m) {
+  m.reply({ embeds: [infoE('🛒 Store', MC_STORE_URL)] });
+}};
+commands.apply = { cat: 'SMP', desc: 'How to apply for staff', async run(m) {
+  m.reply({ embeds: [infoE('📝 Apply for Staff', 'Submit your application in the applications channel or DM a staff member.')] });
+}};
+commands.whitelist = { cat: 'SMP', desc: 'Whitelist yourself', usage: 'whitelist <MCusername>', async run(m, a) {
+  const u = a[0]; if (!u) return m.reply({ embeds: [errE('Provide your Minecraft username.')] });
+  const ch = settings.logs ? m.guild.channels.cache.get(settings.logs) : null;
+  if (ch) ch.send({ embeds: [infoE('📥 Whitelist Request').addFields({ name: 'Discord', value: `${m.author.tag} (${m.author.id})` }, { name: 'MC User', value: u })] });
+  m.reply({ embeds: [okE('✅ Request sent', 'Staff will review it.')] });
+}};
+commands.unwhitelist = { cat: 'SMP', desc: 'Request unwhitelist', usage: 'unwhitelist <MCusername>', async run(m, a) {
+  const u = a[0]; if (!u) return m.reply({ embeds: [errE('Provide your MC username.')] });
+  const ch = settings.logs ? m.guild.channels.cache.get(settings.logs) : null;
+  if (ch) ch.send({ embeds: [infoE('📤 Unwhitelist Request').addFields({ name: 'Discord', value: `${m.author.tag}` }, { name: 'MC User', value: u })] });
+  m.reply({ embeds: [okE('✅ Request sent')] });
+}};
+commands.mcuser = { cat: 'SMP', desc: 'Look up a Minecraft user', usage: 'mcuser <username>', async run(m, a) {
+  const u = a[0]; if (!u) return m.reply({ embeds: [errE('Provide username.')] });
+  try {
+    const r = await fetch(`https://api.mojang.com/users/profiles/minecraft/${u}`).then(x => x.ok ? x.json() : null);
+    if (!r) return m.reply({ embeds: [errE('Not found.')] });
+    m.reply({ embeds: [infoE(`🎮 ${r.name}`).setThumbnail(`https://mc-heads.net/avatar/${r.id}/128`).addFields({ name: 'UUID', value: r.id })] });
+  } catch { m.reply({ embeds: [errE('Lookup failed.')] }); }
+}};
+commands.link = { cat: 'SMP', desc: 'Link Discord to MC account', usage: 'link <MCusername>', async run(m, a) {
+  const u = a[0]; if (!u) return m.reply({ embeds: [errE('Provide MC username.')] });
+  const ch = settings.logs ? m.guild.channels.cache.get(settings.logs) : null;
+  if (ch) ch.send({ embeds: [infoE('🔗 Link Request').addFields({ name: 'Discord', value: `${m.author.tag}` }, { name: 'MC', value: u })] });
+  m.reply({ embeds: [okE('✅ Link request sent')] });
+}};
+commands.unlink = { cat: 'SMP', desc: 'Unlink Discord from MC account', async run(m) {
+  const ch = settings.logs ? m.guild.channels.cache.get(settings.logs) : null;
+  if (ch) ch.send({ embeds: [infoE('🔓 Unlink Request', `${m.author.tag}`)] });
+  m.reply({ embeds: [okE('✅ Request sent')] });
+}};
 
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('ticket_help')
-                .setLabel("Help")
-                .setEmoji("🎫")
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId('ticket_report')
-                .setLabel("Report")
-                .setEmoji("⚠️")
-                .setStyle(ButtonStyle.Danger)
-        );
-    
-    await channel.send({ embeds: [embed], components: [row] });
-}
-
-// ============================================
-// TICKET PANEL - NORMAL (NEW PANEL)
-// ============================================
-async function createNormalTicketPanel(channel) {
-    await safeChannelBulkDelete(channel, 10);
-    
-    const embed = new EmbedBuilder()
-        .setColor(0x2b2d31)
-        .setTitle("Bonbon Utilities | Cj & RCS crack か")
-        .setDescription(
-            `**📬 General Support Tickets**\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `**📝 General Support**\n` +
-            `Open a ticket for general questions and assistance\n\n` +
-            `**❓ Question**\n` +
-            `Ask anything you want to know\n\n` +
-            `**💬 Feedback**\n` +
-            `Share your feedback or suggestions\n\n` +
-            `**📌 Other**\n` +
-            `Any other topic not listed above\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `2026 BONBON™. We are here to help you!`
-        )
-        .setFooter({ text: "Support System • 24/7", iconURL: client.user.displayAvatarURL() })
-        .setTimestamp();
-
-    const row1 = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('normal_ticket_general')
-                .setLabel("General Support")
-                .setEmoji("📝")
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId('normal_ticket_question')
-                .setLabel("Question")
-                .setEmoji("❓")
-                .setStyle(ButtonStyle.Success)
-        );
-
-    const row2 = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('normal_ticket_feedback')
-                .setLabel("Feedback")
-                .setEmoji("💬")
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId('normal_ticket_other')
-                .setLabel("Other")
-                .setEmoji("📌")
-                .setStyle(ButtonStyle.Danger)
-        );
-    
-    await channel.send({ embeds: [embed], components: [row1, row2] });
-}
-
-// ============================================
-// APPLICATION PANEL
-// ============================================
-async function createApplicationPanel(channel) {
-    await safeChannelBulkDelete(channel, 10);
-    
-    const embed = new EmbedBuilder()
-        .setTitle("Bonbon Utilities | Cj & RCS crack か")
-        .setDescription(
-            `> **📋 STAFF & CONTRIBUTOR APPLICATION SYSTEM**\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `**📌 AVAILABLE POSITIONS**\n` +
-            `• 🛠 **Staff Team** - Moderate and manage the server\n` +
-            `• 🖼 **Wallpaper Uploader** - Submit high-quality PC and mobile wallpapers\n` +
-            `• 🎉 **Event Hoster** - Organize fun community events\n` +
-            `• 🤝 **Partnership** - Handle collaborations and partnerships\n` +
-            `• 💻 **Developer** - Work on bots and coding projects\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `**📝 APPLICATION PROCESS**\n` +
-            `1️⃣ Select a position from the dropdown below\n` +
-            `2️⃣ The bot will DM you with questions\n` +
-            `3️⃣ Answer each question in the DM\n` +
-            `4️⃣ Your application will be submitted for review\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `**✅ REQUIREMENTS**\n` +
-            `• Be active and responsible\n` +
-            `• Have good communication skills\n` +
-            `• Follow server rules and guidelines\n` +
-            `• Be at least 13 years old (Discord ToS)\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `*Select a position to begin your application* 🚀`
-        )
-        .setColor(0x2b2d31)
-        .setImage(BANNER_URL)
-        .setFooter({ text: "Application System • DM Based", iconURL: client.user.displayAvatarURL() })
-        .setTimestamp();
-
-    const selectMenu = new StringSelectMenuBuilder()
-        .setCustomId('apply_select')
-        .setPlaceholder('🎯 Select a position to apply for...')
-        .addOptions([
-            new StringSelectMenuOptionBuilder()
-                .setLabel('🛠 Staff Team')
-                .setDescription('Apply for a staff position')
-                .setEmoji('🛠')
-                .setValue('staff'),
-            new StringSelectMenuOptionBuilder()
-                .setLabel('🖼 Wallpaper Uploader')
-                .setDescription('Submit high-quality PC and mobile wallpapers')
-                .setEmoji('🖼')
-                .setValue('wallpaper'),
-            new StringSelectMenuOptionBuilder()
-                .setLabel('🎉 Event Hoster')
-                .setDescription('Apply as an event hoster')
-                .setEmoji('🎉')
-                .setValue('event'),
-            new StringSelectMenuOptionBuilder()
-                .setLabel('🤝 Partnership')
-                .setDescription('Apply for partnerships')
-                .setEmoji('🤝')
-                .setValue('partnership'),
-            new StringSelectMenuOptionBuilder()
-                .setLabel('💻 Developer')
-                .setDescription('Apply as a developer')
-                .setEmoji('💻')
-                .setValue('developer')
-        ]);
-
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-    await channel.send({ embeds: [embed], components: [row] });
-}
-
-// ============================================
-// APPLICATION DM HANDLER
-// ============================================
-async function startApplication(user, position) {
-    const positionConfig = APPLICATION_POSITIONS[position];
-    if (!positionConfig) return false;
-    
-    if (activeApplications.has(user.id)) {
-        await user.send("❌ You already have an active application in progress. Please complete or cancel it first.\nType `cancel` to cancel your current application.")
-            .catch(() => {});
-        return false;
-    }
-    
-    const questions = position === 'wallpaper' ? WALLPAPER_APPLICATION_QUESTIONS : STANDARD_APPLICATION_QUESTIONS;
-    
-    const application = {
-        userId: user.id,
-        position: position,
-        positionName: positionConfig.name,
-        positionEmoji: positionConfig.emoji,
-        positionColor: positionConfig.color,
-        step: 0,
-        answers: {},
-        timestamp: Date.now(),
-        questions: questions
-    };
-    
-    activeApplications.set(user.id, application);
-    
-    const isWallpaper = position === 'wallpaper';
-    const description = isWallpaper 
-        ? `You are applying to become a **Wallpaper Uploader**.\n\nPlease answer **${questions.length} questions** about your wallpaper submissions.\n\nType \`cancel\` at any time to cancel your application.`
-        : `I will ask you **${questions.length} questions**.\nPlease answer each question honestly.\n\n**Type \`cancel\` at any time to cancel your application.**\n\nLet's begin! 🚀`;
-    
-    const welcomeEmbed = new EmbedBuilder()
-        .setTitle(`Bonbon Utilities | Cj & RCS crack か | ${positionConfig.emoji} ${positionConfig.name} Application`)
-        .setDescription(description)
-        .setColor(typeof positionConfig.color === 'string' ? parseInt(positionConfig.color.replace('#', ''), 16) : positionConfig.color)
-        .setTimestamp();
-    
-    await user.send({ embeds: [welcomeEmbed] }).catch(() => {
-        activeApplications.delete(user.id);
-        return false;
-    });
-    
-    await sendNextQuestion(user.id);
-    return true;
-}
-
-async function sendNextQuestion(userId) {
-    const application = activeApplications.get(userId);
-    if (!application) return;
-    
-    const questions = application.questions || STANDARD_APPLICATION_QUESTIONS;
-    
-    if (application.step >= questions.length) {
-        await submitApplication(userId);
-        return;
-    }
-    
-    const question = questions[application.step];
-    const questionEmbed = new EmbedBuilder()
-        .setTitle(`Bonbon Utilities | 📝 Question ${application.step + 1}/${questions.length}`)
-        .setDescription(`**${question.question}**\n\n\`\`\`${question.example}\`\`\``)
-        .setColor(0x5865F2)
-        .setFooter({ text: "Type your answer below • Type 'cancel' to cancel" });
-    
-    const user = await client.users.fetch(userId).catch(() => null);
-    if (user) {
-        await user.send({ embeds: [questionEmbed] }).catch(() => {
-            activeApplications.delete(userId);
-        });
-    }
-}
-
-async function processAnswer(userId, answer) {
-    const application = activeApplications.get(userId);
-    if (!application) return;
-    
-    const questions = application.questions || STANDARD_APPLICATION_QUESTIONS;
-    const currentQuestion = questions[application.step];
-    application.answers[currentQuestion.id] = answer;
-    application.step++;
-    activeApplications.set(userId, application);
-    
-    await sendNextQuestion(userId);
-}
-
-async function submitApplication(userId) {
-    const application = activeApplications.get(userId);
-    if (!application) return;
-    
-    const user = await client.users.fetch(userId).catch(() => null);
-    if (!user) {
-        activeApplications.delete(userId);
-        return;
-    }
-    
-    const guild = client.guilds.cache.get(GUILD_ID);
-    if (!guild) {
-        console.error("Guild not found!");
-        activeApplications.delete(userId);
-        return;
-    }
-    
-    const reviewChannel = guild.channels.cache.get(APP_REVIEW_CHANNEL_ID);
-    if (!reviewChannel) {
-        console.error("Review channel not found!");
-        await user.send("❌ Failed to submit application. Please contact an administrator.");
-        activeApplications.delete(userId);
-        return;
-    }
-    
-    const embed = buildApplicationEmbed(application, user, null);
-    
-    const buttons = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId(`app_approve_${userId}_${application.position}`)
-                .setLabel('Accepter')
-                .setEmoji('✅')
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId(`app_deny_${userId}_${application.position}`)
-                .setLabel('Refuser')
-                .setEmoji('❌')
-                .setStyle(ButtonStyle.Danger),
-            new ButtonBuilder()
-                .setLabel('Voir Profil')
-                .setURL(`https://discord.com/users/${userId}`)
-                .setStyle(ButtonStyle.Link)
-        );
-    
-    await reviewChannel.send({ embeds: [embed], components: [buttons] });
-    
-    const isWallpaper = application.position === 'wallpaper';
-    const successMessage = isWallpaper
-        ? `Your application for **${application.positionName}** has been submitted!\n\n**What happens next?**\n• Our team will review your wallpaper samples\n• You will be contacted via DM if you're selected\n• Please be patient\n\nThank you for your interest in contributing wallpapers! 🎉`
-        : `Your application for **${application.positionName}** has been submitted!\n\n**What happens next?**\n• Our team will review your application within 48 hours\n• You will be contacted via DM if you're selected\n• Please be patient\n\nThank you for your interest! 🎉`;
-    
-    const confirmEmbed = new EmbedBuilder()
-        .setTitle("Bonbon Utilities | ✅ APPLICATION SUBMITTED")
-        .setDescription(successMessage)
-        .setColor(0x22C55E)
-        .setTimestamp();
-    
-    await user.send({ embeds: [confirmEmbed] }).catch(() => {});
-    
-    activeApplications.delete(userId);
-}
-
-async function cancelApplication(userId) {
-    const application = activeApplications.get(userId);
-    if (!application) return false;
-    
-    activeApplications.delete(userId);
-    
-    const user = await client.users.fetch(userId).catch(() => null);
-    if (user) {
-        const cancelEmbed = new EmbedBuilder()
-            .setTitle("Bonbon Utilities | ❌ Application Cancelled")
-            .setDescription("Your application has been cancelled. You can start a new application anytime.")
-            .setColor(0xEF4444)
-            .setTimestamp();
-        await user.send({ embeds: [cancelEmbed] }).catch(() => {});
-    }
-    return true;
-}
-
-function buildApplicationEmbed(application, user, status = null, reason = null) {
-    const positionConfig = APPLICATION_POSITIONS[application.position];
-    const isAccepted = status === 'accepted';
-    const isRejected = status === 'rejected';
-    
-    let title = `${positionConfig.emoji} NEW APPLICATION - ${positionConfig.name}`;
-    let color = typeof positionConfig.color === 'string' ? parseInt(positionConfig.color.replace('#', ''), 16) : positionConfig.color;
-    let footerText = "Application awaiting review";
-    
-    if (isAccepted) {
-        title = `${positionConfig.emoji} APPLICATION ACCEPTED - ${positionConfig.name}`;
-        color = 0x22C55E;
-        footerText = "Application approved";
-    } else if (isRejected) {
-        title = `${positionConfig.emoji} APPLICATION DENIED - ${positionConfig.name}`;
-        color = 0xEF4444;
-        footerText = "Application denied";
-    }
-    
-    const embed = new EmbedBuilder()
-        .setTitle(`Bonbon Utilities | ${title}`)
-        .setDescription(
-            `**Applicant:** ${user.tag} (<@${application.userId}>)\n` +
-            `**Position:** ${positionConfig.name}\n` +
-            `**Submitted:** <t:${Math.floor(application.timestamp / 1000)}:F>\n` +
-            `**User ID:** \`${application.userId}\``
-        )
-        .setColor(color)
-        .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
-        .setImage(BANNER_URL)
-        .setTimestamp()
-        .setFooter({ text: footerText });
-    
-    const isWallpaper = application.position === 'wallpaper';
-    
-    const standardLabels = {
-        fullname: "📝 Full name",
-        age: "🎂 Age",
-        why: "💭 Why join staff team?",
-        skills: "🛠️ Skills",
-        experience: "📜 Experience",
-        availability: "⏰ Availability",
-        device: "💻 Device"
-    };
-    
-    const wallpaperLabels = {
-        type: "🖼 Wallpaper Types",
-        platform: "📱 Platform",
-        origin: "🎨 Origin (Created/Collected)",
-        portfolio: "🔗 Portfolio / Examples",
-        activity: "⏱️ Upload Activity",
-        motivation: "💡 Motivation"
-    };
-    
-    const labels = isWallpaper ? wallpaperLabels : standardLabels;
-    
-    for (const [key, value] of Object.entries(application.answers)) {
-        const label = labels[key] || key;
-        embed.addFields({ 
-            name: label, 
-            value: value.length > 1024 ? value.substring(0, 1021) + '...' : value, 
-            inline: false 
-        });
-    }
-    
-    if (reason) {
-        embed.addFields({ name: "❌ Reason", value: `> ${reason}`, inline: false });
-    }
-    
-    return embed;
-}
-
-// ============================================
-// READY EVENT
-// ============================================
-client.once('ready', async () => {
-    console.log(`✨ ${client.user.tag} is online!`);
-    console.log(`📋 Bonbon Utilities | Cj & RCS crack か - Ticket & Application Bot`);
-    console.log(`🎫 Minecraft Ticket Panel Channel: ${TICKET_PANEL_CHANNEL_ID_NEW}`);
-    console.log(`🎫 Normal Ticket Panel Channel: ${TICKET_PANEL_CHANNEL_ID_NORMAL}`);
-    console.log(`📝 Ticket Log Channel: ${TICKET_LOG_CHANNEL_ID_NEW}`);
-    console.log(`👑 Support Role: ${SUPPORT_ROLE_ID}`);
-    
-    const guild = client.guilds.cache.get(GUILD_ID);
-    if (!guild) {
-        console.error("❌ Guild not found! Check GUILD_ID environment variable.");
-        return;
-    }
-
-    loadActiveTickets();
-    await verifyAndCleanTickets(guild);
-    
-    console.log(`\n📊 Staff Roles Loaded (${staffRolesArray.length}):`);
-    staffRolesArray.forEach(roleId => {
-        const role = guild.roles.cache.get(roleId);
-        console.log(`  ✓ ${role ? role.name : 'Unknown role'} (${roleId})`);
-    });
-
-    console.log(`\n📊 Support Role:`);
-    const supportRole = guild.roles.cache.get(SUPPORT_ROLE_ID);
-    console.log(`  ✓ ${supportRole ? supportRole.name : 'Unknown role'} (${SUPPORT_ROLE_ID})`);
-
-    console.log(`\n📊 Reviewer Roles Loaded (${reviewerRolesArray.length}):`);
-    reviewerRolesArray.forEach(roleId => {
-        const role = guild.roles.cache.get(roleId);
-        console.log(`  ✓ ${role ? role.name : 'Unknown role'} (${roleId})`);
-    });
-
-    if (ACCEPTED_ROLE_ID) {
-        const acceptedRole = guild.roles.cache.get(ACCEPTED_ROLE_ID);
-        console.log(`\n✓ Accepted Role: ${acceptedRole ? acceptedRole.name : 'Unknown role'} (${ACCEPTED_ROLE_ID})`);
-    }
-
-    // Fix channel permissions for ticket panel channels - EVERYONE CAN SEE
-    const fixChannelPermissions = async (channelId) => {
-        const channel = client.channels.cache.get(channelId);
-        if (channel) {
-            try {
-                await channel.permissionOverwrites.edit(guild.id, {
-                    ViewChannel: true,
-                    ReadMessageHistory: true
-                });
-                console.log(`✅ Fixed permissions for channel: ${channel.name} (${channelId})`);
-            } catch (error) {
-                console.error(`❌ Failed to fix permissions for ${channelId}:`, error.message);
-            }
-        }
-    };
-
-    await fixChannelPermissions(TICKET_PANEL_CHANNEL_ID_NEW);
-    await fixChannelPermissions(TICKET_PANEL_CHANNEL_ID_NORMAL);
-    if (APP_PANEL_CHANNEL_ID) await fixChannelPermissions(APP_PANEL_CHANNEL_ID);
-
-    // Create Minecraft ticket panel
-    const minecraftPanelChannel = client.channels.cache.get(TICKET_PANEL_CHANNEL_ID_NEW);
-    if (minecraftPanelChannel) {
-        await createMinecraftTicketPanel(minecraftPanelChannel);
-        console.log("\n✅ Minecraft Ticket panel deployed in channel: " + TICKET_PANEL_CHANNEL_ID_NEW);
-    } else {
-        console.log(`\n❌ Minecraft Ticket panel channel ${TICKET_PANEL_CHANNEL_ID_NEW} not found!`);
-    }
-
-    // Create Normal ticket panel
-    const normalPanelChannel = client.channels.cache.get(TICKET_PANEL_CHANNEL_ID_NORMAL);
-    if (normalPanelChannel) {
-        await createNormalTicketPanel(normalPanelChannel);
-        console.log("✅ Normal Ticket panel deployed in channel: " + TICKET_PANEL_CHANNEL_ID_NORMAL);
-    } else {
-        console.log(`❌ Normal Ticket panel channel ${TICKET_PANEL_CHANNEL_ID_NORMAL} not found!`);
-    }
-
-    if (APP_PANEL_CHANNEL_ID) {
-        const appPanelChannel = client.channels.cache.get(APP_PANEL_CHANNEL_ID);
-        if (appPanelChannel) {
-            await createApplicationPanel(appPanelChannel);
-            console.log("✅ Application panel deployed!");
-        }
-    }
-
-    console.log(`\n🚀 Bot is ready!`);
-    console.log(`💾 Ticket persistence enabled - ${activeTickets.size} tickets restored`);
-    console.log(`👀 All panel channels are now visible to everyone!`);
+/* ============================================================
+ *                     EVENT: READY
+ * ============================================================ */
+client.once('ready', () => {
+  console.log(`[READY] Logged in as ${client.user.tag}`);
+  client.user.setActivity('𝑲𝒉𝒐𝒃𝒛𝒂 𝑺𝑴𝑷', { type: ActivityType.Watching });
 });
 
-// ============================================
-// TICKET SYSTEM - BUTTON HANDLER (MINECRAFT)
-// ============================================
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton()) return;
-    
-    // Handle Minecraft ticket buttons
-    if (interaction.customId.startsWith('ticket_')) {
-        const type = interaction.customId.replace('ticket_', '');
-        const typeConfig = TICKET_TYPES[type];
-        if (!typeConfig) return;
-        
-        for (const [id, data] of activeTickets) {
-            if (data.userId === interaction.user.id) {
-                const errorEmbed = new EmbedBuilder()
-                    .setTitle("❌ TICKET LIMIT REACHED")
-                    .setDescription(`> You already have an open ticket!\n> Please close your existing ticket before creating a new one.\n\n**Channel:** <#${id}>`)
-                    .setColor(0xEF4444);
-                return interaction.reply({ embeds: [errorEmbed], ephemeral: true });
-            }
-        }
-        
-        await interaction.reply({ 
-            embeds: [new EmbedBuilder().setDescription("🔄 `Creating your ticket...`").setColor(0x38BDF8)], 
-            ephemeral: true 
-        });
-        
-        const ticketName = `${type}-${interaction.user.username}`;
-        
-        try {
-            const ticketOverwrites = getTicketPermissionOverwrites();
-            
-            const ticketChannel = await interaction.guild.channels.create({
-                name: ticketName,
-                type: ChannelType.GuildText,
-                parent: TICKET_CATEGORY_ID,
-                topic: `Ticket Owner: ${interaction.user.tag} (${interaction.user.id}) | Type: ${typeConfig.name}`,
-                permissionOverwrites: [
-                    { id: interaction.guild.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] },
-                    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-                    ...ticketOverwrites
-                ]
-            });
-            
-            activeTickets.set(ticketChannel.id, { 
-                userId: interaction.user.id, 
-                userTag: interaction.user.tag,
-                type: typeConfig.name,
-                createdAt: Date.now()
-            });
-            saveActiveTickets();
-            
-            const welcomeEmbed = new EmbedBuilder()
-                .setTitle(`Bonbon Utilities | ${typeConfig.emoji} ${typeConfig.name.toUpperCase()} TICKET`)
-                .setDescription(
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `**👋 Welcome ${interaction.user}!**\n\n` +
-                    `> **Ticket Type:** ${typeConfig.name}\n` +
-                    `> **Category:** ${typeConfig.desc}\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `**📝 INSTRUCTIONS**\n` +
-                    `• Please describe your issue in detail\n` +
-                    `• Attach screenshots if possible\n` +
-                    `• Our team will respond shortly\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `**🔒 TICKET CONTROLS**\n` +
-                    `• Click **Close Ticket** to end this session\n` +
-                    `• Click **Claim Ticket** to assign a staff member\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-                )
-                .setColor(typeConfig.color)
-                .setImage(BANNER_URL)
-                .setFooter({ text: `Ticket ID: ${ticketChannel.id} | Support Team`, iconURL: interaction.guild.iconURL() })
-                .setTimestamp();
-            
-            const actionRow = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('close_ticket')
-                        .setLabel('CLOSE TICKET')
-                        .setEmoji('🔒')
-                        .setStyle(ButtonStyle.Danger),
-                    new ButtonBuilder()
-                        .setCustomId('claim_ticket')
-                        .setLabel('CLAIM TICKET')
-                        .setEmoji('🎫')
-                        .setStyle(ButtonStyle.Secondary)
-                );
-            
-            const supportMention = getSupportRoleMention();
-            const mentionText = `${interaction.user} | ${supportMention}`;
-            await ticketChannel.send({ content: mentionText, embeds: [welcomeEmbed], components: [actionRow] });
-            
-            const logEmbed = new EmbedBuilder()
-                .setTitle("Bonbon Utilities | 🎫 TICKET OPENED")
-                .setDescription(`**User:** ${interaction.user.tag}\n**Type:** ${typeConfig.name}\n**Channel:** ${ticketChannel}`)
-                .setColor(0x22C55E)
-                .setTimestamp();
-            await sendLog(interaction.guild, TICKET_LOG_CHANNEL_ID_NEW, logEmbed);
-            
-            const successEmbed = new EmbedBuilder()
-                .setTitle("Bonbon Utilities | ✅ TICKET CREATED")
-                .setDescription(`> Your ticket has been created!\n> **Channel:** ${ticketChannel}\n> Support team will assist you shortly.`)
-                .setColor(0x22C55E);
-            
-            await interaction.editReply({ embeds: [successEmbed], ephemeral: true });
-            
-        } catch (err) {
-            console.error(err);
-            const errorEmbed = new EmbedBuilder()
-                .setTitle("Bonbon Utilities | ❌ ERROR")
-                .setDescription("> Failed to create ticket. Please contact an administrator.")
-                .setColor(0xEF4444);
-            await interaction.editReply({ embeds: [errorEmbed], ephemeral: true });
-        }
-    }
-    
-    // Handle Normal ticket buttons
-    else if (interaction.customId.startsWith('normal_ticket_')) {
-        const type = interaction.customId.replace('normal_ticket_', '');
-        const typeConfig = NORMAL_TICKET_TYPES[type];
-        if (!typeConfig) return;
-        
-        for (const [id, data] of activeTickets) {
-            if (data.userId === interaction.user.id) {
-                const errorEmbed = new EmbedBuilder()
-                    .setTitle("❌ TICKET LIMIT REACHED")
-                    .setDescription(`> You already have an open ticket!\n> Please close your existing ticket before creating a new one.\n\n**Channel:** <#${id}>`)
-                    .setColor(0xEF4444);
-                return interaction.reply({ embeds: [errorEmbed], ephemeral: true });
-            }
-        }
-        
-        await interaction.reply({ 
-            embeds: [new EmbedBuilder().setDescription("🔄 `Creating your ticket...`").setColor(0x38BDF8)], 
-            ephemeral: true 
-        });
-        
-        const ticketName = `${type}-${interaction.user.username}`;
-        
-        try {
-            const ticketOverwrites = getTicketPermissionOverwrites();
-            
-            const ticketChannel = await interaction.guild.channels.create({
-                name: ticketName,
-                type: ChannelType.GuildText,
-                parent: TICKET_CATEGORY_ID,
-                topic: `Ticket Owner: ${interaction.user.tag} (${interaction.user.id}) | Type: ${typeConfig.name}`,
-                permissionOverwrites: [
-                    { id: interaction.guild.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] },
-                    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-                    ...ticketOverwrites
-                ]
-            });
-            
-            activeTickets.set(ticketChannel.id, { 
-                userId: interaction.user.id, 
-                userTag: interaction.user.tag,
-                type: typeConfig.name,
-                createdAt: Date.now()
-            });
-            saveActiveTickets();
-            
-            const welcomeEmbed = new EmbedBuilder()
-                .setTitle(`Bonbon Utilities | ${typeConfig.emoji} ${typeConfig.name.toUpperCase()} TICKET`)
-                .setDescription(
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `**👋 Welcome ${interaction.user}!**\n\n` +
-                    `> **Ticket Type:** ${typeConfig.name}\n` +
-                    `> **Category:** ${typeConfig.desc}\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `**📝 INSTRUCTIONS**\n` +
-                    `• Please describe your topic in detail\n` +
-                    `• Provide any relevant information\n` +
-                    `• Our team will respond shortly\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `**🔒 TICKET CONTROLS**\n` +
-                    `• Click **Close Ticket** to end this session\n` +
-                    `• Click **Claim Ticket** to assign a staff member\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-                )
-                .setColor(typeConfig.color)
-                .setImage(BANNER_URL)
-                .setFooter({ text: `Ticket ID: ${ticketChannel.id} | Support Team`, iconURL: interaction.guild.iconURL() })
-                .setTimestamp();
-            
-            const actionRow = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('close_ticket')
-                        .setLabel('CLOSE TICKET')
-                        .setEmoji('🔒')
-                        .setStyle(ButtonStyle.Danger),
-                    new ButtonBuilder()
-                        .setCustomId('claim_ticket')
-                        .setLabel('CLAIM TICKET')
-                        .setEmoji('🎫')
-                        .setStyle(ButtonStyle.Secondary)
-                );
-            
-            const supportMention = getSupportRoleMention();
-            const mentionText = `${interaction.user} | ${supportMention}`;
-            await ticketChannel.send({ content: mentionText, embeds: [welcomeEmbed], components: [actionRow] });
-            
-            const logEmbed = new EmbedBuilder()
-                .setTitle("Bonbon Utilities | 🎫 TICKET OPENED")
-                .setDescription(`**User:** ${interaction.user.tag}\n**Type:** ${typeConfig.name}\n**Channel:** ${ticketChannel}`)
-                .setColor(0x22C55E)
-                .setTimestamp();
-            await sendLog(interaction.guild, TICKET_LOG_CHANNEL_ID_NEW, logEmbed);
-            
-            const successEmbed = new EmbedBuilder()
-                .setTitle("Bonbon Utilities | ✅ TICKET CREATED")
-                .setDescription(`> Your ticket has been created!\n> **Channel:** ${ticketChannel}\n> Support team will assist you shortly.`)
-                .setColor(0x22C55E);
-            
-            await interaction.editReply({ embeds: [successEmbed], ephemeral: true });
-            
-        } catch (err) {
-            console.error(err);
-            const errorEmbed = new EmbedBuilder()
-                .setTitle("Bonbon Utilities | ❌ ERROR")
-                .setDescription("> Failed to create ticket. Please contact an administrator.")
-                .setColor(0xEF4444);
-            await interaction.editReply({ embeds: [errorEmbed], ephemeral: true });
-        }
-    }
-    
-    else if (interaction.customId === 'close_ticket') {
-        const ticketData = activeTickets.get(interaction.channel.id);
-        if (!ticketData) {
-            return interaction.reply({ content: "❌ This is not a valid ticket channel.", ephemeral: true });
-        }
-        
-        if (!canManageTickets(interaction.member)) {
-            return interaction.reply({ 
-                embeds: [new EmbedBuilder().setDescription(`❌ Only ${getSupportRoleMention()} or staff members can close tickets.`).setColor(0xEF4444)], 
-                ephemeral: true 
-            });
-        }
-        
-        await interaction.deferReply({ ephemeral: true });
-        
-        const transcriptPath = await generateTranscript(interaction.channel, ticketData);
-        
-        if (transcriptPath && TRANSCRIPT_CHANNEL_ID) {
-            const transcriptChannel = interaction.guild.channels.cache.get(TRANSCRIPT_CHANNEL_ID);
-            if (transcriptChannel) {
-                const transcriptEmbed = new EmbedBuilder()
-                    .setTitle("Bonbon Utilities | 📄 TICKET TRANSCRIPT")
-                    .setDescription(`**Channel:** ${interaction.channel.name}\n**Closed by:** ${interaction.user.tag}\n**Type:** ${ticketData.type || 'Unknown'}\n**Owner:** ${ticketData.userTag || 'Unknown'}`)
-                    .setColor(0xF97316)
-                    .setTimestamp();
-                await transcriptChannel.send({ embeds: [transcriptEmbed], files: [transcriptPath] });
-            }
-        }
-        
-        const logEmbed = new EmbedBuilder()
-            .setTitle("Bonbon Utilities | 🔒 TICKET CLOSED")
-            .setDescription(`**User:** ${ticketData.userTag}\n**Closed by:** ${interaction.user.tag}\n**Channel:** #${interaction.channel.name}`)
-            .setColor(0xEF4444)
-            .setTimestamp();
-        await sendLog(interaction.guild, TICKET_LOG_CHANNEL_ID_NEW, logEmbed);
-        
-        try {
-            await interaction.channel.delete();
-            activeTickets.delete(interaction.channel.id);
-            saveActiveTickets();
-            if (transcriptPath) fs.unlinkSync(transcriptPath);
-        } catch (err) {
-            console.error(err);
-        }
-    }
-    
-    else if (interaction.customId === 'claim_ticket') {
-        const ticketData = activeTickets.get(interaction.channel.id);
-        if (!ticketData) {
-            return interaction.reply({ content: "❌ This is not a valid ticket channel.", ephemeral: true });
-        }
-        
-        if (!canManageTickets(interaction.member)) {
-            return interaction.reply({ 
-                embeds: [new EmbedBuilder().setDescription(`❌ Only ${getSupportRoleMention()} or staff members can claim tickets.`).setColor(0xEF4444)], 
-                ephemeral: true 
-            });
-        }
-        
-        if (ticketData.claimedBy) {
-            return interaction.reply({ 
-                embeds: [new EmbedBuilder().setDescription(`❌ This ticket has already been claimed by <@${ticketData.claimedBy}>.`).setColor(0xEF4444)], 
-                ephemeral: true 
-            });
-        }
-        
-        ticketData.claimedBy = interaction.user.id;
-        ticketData.claimedAt = Date.now();
-        activeTickets.set(interaction.channel.id, ticketData);
-        saveActiveTickets();
-        
-        const claimEmbed = new EmbedBuilder()
-            .setTitle("Bonbon Utilities | 🎫 TICKET CLAIMED")
-            .setDescription(`> **${interaction.user}** has claimed this ticket and will assist you shortly.`)
-            .setColor(0x22C55E)
-            .setTimestamp();
-        
-        await interaction.reply({ embeds: [claimEmbed] });
-        
-        const logEmbed = new EmbedBuilder()
-            .setTitle("Bonbon Utilities | 🎫 TICKET CLAIMED")
-            .setDescription(`**Channel:** #${interaction.channel.name}\n**Staff:** ${interaction.user.tag}\n**Ticket Owner:** ${ticketData.userTag}`)
-            .setColor(0x3B82F6)
-            .setTimestamp();
-        await sendLog(interaction.guild, TICKET_LOG_CHANNEL_ID_NEW, logEmbed);
-    }
+/* ============================================================
+ *                     EVENT: WELCOME
+ * ============================================================ */
+client.on('guildMemberAdd', async member => {
+  // Anti-raid
+  joinLog.push(Date.now());
+  while (joinLog.length && Date.now() - joinLog[0] > 10000) joinLog.shift();
+  if (settings.antiraid && joinLog.length >= 8) {
+    try { await member.kick('Anti-raid triggered'); } catch {}
+    return;
+  }
+
+  if (!WELCOME_CHANNEL_ID) return;
+  const ch = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
+  if (!ch) return;
+  const e = new EmbedBuilder()
+    .setColor(C.ok)
+    .setTitle('🎉 Welcome!')
+    .setDescription(`Welcome ${member} to **𝑲𝒉𝒐𝒃𝒛𝒂 𝑺𝑴𝑷**!\nمرحبا بيك في سيرفر **𝑲𝒉𝒐𝒃𝒛𝒂 𝑺𝑴𝑷**!`)
+    .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+    .setFooter({ text: `Member #${member.guild.memberCount}` })
+    .setTimestamp();
+  if (WELCOME_IMAGE) e.setImage(WELCOME_IMAGE);
+  ch.send({ content: `${member}`, embeds: [e] }).catch(()=>{});
 });
 
-// ============================================
-// APPLICATION SYSTEM - DROPDOWN HANDLER
-// ============================================
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isStringSelectMenu()) return;
-    if (interaction.customId !== 'apply_select') return;
-    
-    const selectedPosition = interaction.values[0];
-    const positionConfig = APPLICATION_POSITIONS[selectedPosition];
-    
-    if (!positionConfig) {
-        return interaction.reply({ content: "❌ Invalid position selected.", ephemeral: true });
-    }
-    
-    try {
-        await interaction.user.send({ content: "Starting application process..." });
-    } catch (error) {
-        return interaction.reply({ 
-            content: "❌ I cannot send you a DM. Please enable DMs from server members and try again.", 
-            ephemeral: true 
-        });
-    }
-    
-    const success = await startApplication(interaction.user, selectedPosition);
-    
-    if (success) {
-        const questionCount = selectedPosition === 'wallpaper' ? WALLPAPER_APPLICATION_QUESTIONS.length : STANDARD_APPLICATION_QUESTIONS.length;
-        await interaction.reply({ 
-            content: `✅ Application process started! Please check your DMs (<@${interaction.user.id}>). You will be asked ${questionCount} questions.`,
-            ephemeral: true 
-        });
-    } else {
-        await interaction.reply({ 
-            content: "❌ Failed to start application. You may already have an active application. Type `cancel` in DMs to cancel it.",
-            ephemeral: true 
-        });
-    }
+/* ============================================================
+ *                     EVENT: LOGS
+ * ============================================================ */
+client.on('guildMemberUpdate', async (oldM, newM) => {
+  // Nickname
+  if (oldM.nickname !== newM.nickname) {
+    const exec = await auditExec(newM.guild, AuditLogEvent.MemberUpdate, newM.id);
+    const e = infoE('✏️ Nickname Changed').addFields(
+      { name: 'Member', value: `${newM.user.tag}`, inline: true },
+      { name: 'Before', value: oldM.nickname || '*none*', inline: true },
+      { name: 'After', value: newM.nickname || '*none*', inline: true },
+      { name: 'By', value: exec ? exec.tag : 'Unknown' });
+    sendLog(newM.guild, settings.logs || GENERAL_LOG_CHANNEL_ID, e);
+  }
+  // Roles
+  const added = newM.roles.cache.filter(r => !oldM.roles.cache.has(r.id));
+  const removed = oldM.roles.cache.filter(r => !newM.roles.cache.has(r.id));
+  if (added.size || removed.size) {
+    const exec = await auditExec(newM.guild, AuditLogEvent.MemberRoleUpdate, newM.id);
+    const e = infoE('🏷️ Role Update').addFields({ name: 'Member', value: `${newM.user.tag} (${newM.id})` });
+    if (added.size) e.addFields({ name: 'Added', value: added.map(r => r.toString()).join(' ') });
+    if (removed.size) e.addFields({ name: 'Removed', value: removed.map(r => r.toString()).join(' ') });
+    if (exec) e.addFields({ name: 'By', value: exec.tag });
+    sendLog(newM.guild, ROLE_LOG_CHANNEL_ID || settings.logs, e);
+  }
 });
 
-// ============================================
-// DM MESSAGE HANDLER
-// ============================================
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    if (message.guild) return;
-    
-    const userId = message.author.id;
-    const content = message.content.trim();
-    
-    if (content.toLowerCase() === 'cancel') {
-        const cancelled = await cancelApplication(userId);
-        if (cancelled) {
-            await message.reply("✅ Your application has been cancelled.");
-        } else {
-            await message.reply("❌ You don't have an active application to cancel.");
-        }
-        return;
-    }
-    
-    const application = activeApplications.get(userId);
-    if (!application) return;
-    
-    if (content.length < 1) {
-        await message.reply("❌ Please provide a valid answer.");
-        return;
-    }
-    
-    await processAnswer(userId, content);
+client.on('messageDelete', message => {
+  if (!message.guild || message.author?.bot) return;
+  if (!message.content && !message.attachments.size) return;
+  const e = errE('🗑️ Message Deleted').addFields(
+    { name: 'Author', value: `${message.author?.tag || 'Unknown'}`, inline: true },
+    { name: 'Channel', value: `${message.channel}`, inline: true },
+    { name: 'Content', value: (message.content || '*[attachment]*').slice(0, 1000) });
+  sendLog(message.guild, settings.logs || GENERAL_LOG_CHANNEL_ID, e);
 });
 
-// ============================================
-// APPLICATION REVIEW - ACCEPT BUTTON
-// ============================================
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton()) return;
-    if (!interaction.customId.startsWith('app_approve_')) return;
-    
-    if (!isReviewer(interaction.member)) {
-        const roleMentions = reviewerRolesArray.map(id => `<@&${id}>`).join(', ');
-        return interaction.reply({ 
-            embeds: [new EmbedBuilder()
-                .setDescription(`❌ You don't have permission to review applications.\n\nRequired roles: ${roleMentions}`)
-                .setColor(0xEF4444)
-            ], 
-            ephemeral: true 
-        });
-    }
-    
-    const parts = interaction.customId.split('_');
-    const userId = parts[2];
-    const position = parts[3];
-    const positionConfig = APPLICATION_POSITIONS[position];
-    
-    if (!positionConfig) {
-        return interaction.reply({ content: "❌ Invalid position.", ephemeral: true });
-    }
-    
-    const guild = interaction.guild;
-    const member = await guild.members.fetch(userId).catch(() => null);
-    const user = await client.users.fetch(userId).catch(() => null);
-    
-    if (!user) {
-        return interaction.reply({ content: "❌ User not found.", ephemeral: true });
-    }
-    
-    const originalEmbed = interaction.message.embeds[0];
-    const answers = {};
-    
-    const isWallpaper = position === 'wallpaper';
-    const answerKeys = isWallpaper 
-        ? ['type', 'platform', 'origin', 'portfolio', 'activity', 'motivation']
-        : ['fullname', 'age', 'why', 'skills', 'experience', 'availability', 'device'];
-    
-    const answerFields = originalEmbed.fields.slice(4);
-    for (let i = 0; i < answerFields.length && i < answerKeys.length; i++) {
-        answers[answerKeys[i]] = answerFields[i].value;
-    }
-    
-    const application = {
-        userId: userId,
-        position: position,
-        positionName: positionConfig.name,
-        positionEmoji: positionConfig.emoji,
-        positionColor: positionConfig.color,
-        answers: answers,
-        timestamp: originalEmbed.timestamp ? new Date(originalEmbed.timestamp).getTime() : Date.now()
-    };
-    
-    const acceptedEmbed = buildApplicationEmbed(application, user, 'accepted');
-    await sendLog(guild, APP_ACCEPTED_CHANNEL_ID, acceptedEmbed);
-    
-    if (positionConfig.roleId && member) {
-        try {
-            await member.roles.add(positionConfig.roleId);
-            console.log(`✅ Added role ${positionConfig.roleId} (${positionConfig.name}) to ${user.tag}`);
-        } catch (error) {
-            console.error(`Failed to add role to ${user.tag}:`, error.message);
-        }
-    }
-    
-    try {
-        const isWallpaperSuccess = position === 'wallpaper';
-        const successMessage = isWallpaperSuccess
-            ? `**Congratulations ${user.username} !**\n\n` +
-              `Your application for **${positionConfig.name}** has been **accepted** !\n\n` +
-              `**Next steps:**\n` +
-              `• A staff member will contact you shortly\n` +
-              `• You will receive instructions for submitting wallpapers\n` +
-              `• Welcome to the wallpaper contributor team! 🎉`
-            : `**Congratulations ${user.username} !**\n\n` +
-              `Your application for **${positionConfig.name}** has been **accepted** !\n\n` +
-              `**Next steps:**\n` +
-              `• A staff member will contact you shortly\n` +
-              `• You will receive instructions to get started\n` +
-              `• Welcome to the team ! 🎉`;
-        
-        const acceptDMEmbed = new EmbedBuilder()
-            .setTitle("Bonbon Utilities | ✅ Félicitations ! Candidature Acceptée")
-            .setDescription(successMessage)
-            .setColor(0x22C55E)
-            .setTimestamp();
-        await user.send({ embeds: [acceptDMEmbed] });
-    } catch (e) {
-        console.log(`Could not DM ${userId}`);
-    }
-    
-    await interaction.reply({ 
-        embeds: [new EmbedBuilder()
-            .setTitle("Bonbon Utilities | ✅ Candidature Acceptée")
-            .setDescription(`Vous avez accepté la candidature de **${user.tag}** pour **${positionConfig.name}**.`)
-            .setColor(0x22C55E)
-        ], 
-        ephemeral: false 
-    });
-    
-    const row = ActionRowBuilder.from(interaction.message.components[0]);
-    row.components.forEach(component => component.setDisabled(true));
-    await interaction.message.edit({ components: [row] }).catch(() => {});
+client.on('messageUpdate', (oldM, newM) => {
+  if (!newM.guild || newM.author?.bot) return;
+  if (oldM.content === newM.content) return;
+  const e = infoE('✏️ Message Edited').addFields(
+    { name: 'Author', value: newM.author.tag, inline: true },
+    { name: 'Channel', value: `${newM.channel}`, inline: true },
+    { name: 'Before', value: (oldM.content || '*empty*').slice(0, 800) },
+    { name: 'After', value: (newM.content || '*empty*').slice(0, 800) },
+    { name: 'Jump', value: `[Go to message](${newM.url})` });
+  sendLog(newM.guild, settings.logs || GENERAL_LOG_CHANNEL_ID, e);
 });
 
-// ============================================
-// APPLICATION REVIEW - DENY BUTTON
-// ============================================
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton()) return;
-    if (!interaction.customId.startsWith('app_deny_')) return;
-    
-    if (!isReviewer(interaction.member)) {
-        const roleMentions = reviewerRolesArray.map(id => `<@&${id}>`).join(', ');
-        return interaction.reply({ 
-            embeds: [new EmbedBuilder()
-                .setDescription(`❌ You don't have permission to review applications.\n\nRequired roles: ${roleMentions}`)
-                .setColor(0xEF4444)
-            ], 
-            ephemeral: true 
-        });
-    }
-    
-    const parts = interaction.customId.split('_');
-    const userId = parts[2];
-    const position = parts[3];
-    
-    const modal = new ModalBuilder()
-        .setCustomId(`reject_modal_${userId}_${position}`)
-        .setTitle("Refuser la candidature");
-    
-    const reasonInput = new TextInputBuilder()
-        .setCustomId('reason')
-        .setLabel("Raison du refus")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
-        .setPlaceholder("Ex: Manque d'expérience, disponibilité insuffisante...")
-        .setMaxLength(1000);
-    
-    const row = new ActionRowBuilder().addComponents(reasonInput);
-    modal.addComponents(row);
-    
-    client.denyMessageMap = client.denyMessageMap || new Map();
-    client.denyMessageMap.set(`${userId}_${position}`, interaction.message);
-    
-    await interaction.showModal(modal);
+client.on('guildMemberRemove', async member => {
+  const exec = await auditExec(member.guild, AuditLogEvent.MemberKick, member.id);
+  const e = errE('👋 Member Left').addFields({ name: 'User', value: `${member.user.tag} (${member.id})` });
+  if (exec) e.addFields({ name: 'Kicked by', value: exec.tag });
+  sendLog(member.guild, KICK_LOG_CHANNEL_ID || settings.logs || GENERAL_LOG_CHANNEL_ID, e);
 });
 
-// ============================================
-// REJECT MODAL SUBMIT HANDLER
-// ============================================
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isModalSubmit()) return;
-    if (!interaction.customId.startsWith('reject_modal_')) return;
-    
-    const parts = interaction.customId.replace('reject_modal_', '').split('_');
-    const userId = parts[0];
-    const position = parts[1];
-    const reason = interaction.fields.getTextInputValue('reason');
-    
-    const positionConfig = APPLICATION_POSITIONS[position];
-    if (!positionConfig) {
-        return interaction.reply({ content: "❌ Invalid position.", ephemeral: true });
-    }
-    
-    const guild = interaction.guild;
-    const user = await client.users.fetch(userId).catch(() => null);
-    
-    if (!user) {
-        return interaction.reply({ content: "❌ User not found.", ephemeral: true });
-    }
-    
-    const originalMessage = client.denyMessageMap?.get(`${userId}_${position}`);
-    const originalEmbed = originalMessage?.embeds[0];
-    
-    const answers = {};
-    if (originalEmbed) {
-        const isWallpaper = position === 'wallpaper';
-        const answerKeys = isWallpaper 
-            ? ['type', 'platform', 'origin', 'portfolio', 'activity', 'motivation']
-            : ['fullname', 'age', 'why', 'skills', 'experience', 'availability', 'device'];
-        const answerFields = originalEmbed.fields.slice(4);
-        for (let i = 0; i < answerFields.length && i < answerKeys.length; i++) {
-            answers[answerKeys[i]] = answerFields[i].value;
-        }
-    }
-    
-    const application = {
-        userId: userId,
-        position: position,
-        positionName: positionConfig.name,
-        positionEmoji: positionConfig.emoji,
-        positionColor: positionConfig.color,
-        answers: answers,
-        timestamp: originalEmbed ? new Date(originalEmbed.timestamp).getTime() : Date.now()
-    };
-    
-    const rejectedEmbed = buildApplicationEmbed(application, user, 'rejected', reason);
-    await sendLog(guild, APP_REJECTED_CHANNEL_ID, rejectedEmbed);
-    
-    try {
-        const rejectDMEmbed = new EmbedBuilder()
-            .setTitle("Bonbon Utilities | ❌ Candidature Refusée")
-            .setDescription(
-                `**Bonjour ${user.username}**,\n\n` +
-                `Nous vous remercions d'avoir postulé pour **${positionConfig.name}**.\n\n` +
-                `Malheureusement, votre candidature n'a pas été retenue pour le moment.\n\n` +
-                `**Raison du refus:**\n> ${reason}\n\n` +
-                `Vous pourrez postuler à nouveau dans 30 jours.\n\n` +
-                `Merci de votre compréhension !`
-            )
-            .setColor(0xEF4444)
-            .setTimestamp();
-        await user.send({ embeds: [rejectDMEmbed] });
-    } catch (e) {
-        console.log(`Could not DM ${userId}`);
-    }
-    
-    await interaction.reply({ 
-        embeds: [new EmbedBuilder()
-            .setTitle("Bonbon Utilities | ❌ Candidature Refusée")
-            .setDescription(`Vous avez refusé la candidature de **${user.tag}** pour **${positionConfig.name}**.\n\n**Raison:** ${reason}`)
-            .setColor(0xEF4444)
-        ], 
-        ephemeral: false 
-    });
-    
-    const originalMessageToDisable = client.denyMessageMap?.get(`${userId}_${position}`);
-    if (originalMessageToDisable) {
-        const row = ActionRowBuilder.from(originalMessageToDisable.components[0]);
-        row.components.forEach(component => component.setDisabled(true));
-        await originalMessageToDisable.edit({ components: [row] }).catch(() => {});
-        client.denyMessageMap.delete(`${userId}_${position}`);
-    }
+client.on('guildBanAdd', async ban => {
+  const exec = await auditExec(ban.guild, AuditLogEvent.MemberBanAdd, ban.user.id);
+  const e = errE('🔨 Member Banned').addFields(
+    { name: 'User', value: `${ban.user.tag} (${ban.user.id})` },
+    { name: 'By', value: exec ? exec.tag : 'Unknown' },
+    { name: 'Reason', value: ban.reason || 'None' });
+  sendLog(ban.guild, BAN_LOG_CHANNEL_ID || settings.logs, e);
 });
 
-// ============================================
-// GUILD MEMBER ADD - FIX PERMISSIONS FOR NEW MEMBERS
-// ============================================
-client.on('guildMemberAdd', async (member) => {
-    // Ensure new members can see the ticket panel channels
-    const panelChannels = [TICKET_PANEL_CHANNEL_ID_NEW, TICKET_PANEL_CHANNEL_ID_NORMAL];
-    if (APP_PANEL_CHANNEL_ID) panelChannels.push(APP_PANEL_CHANNEL_ID);
-    
-    for (const channelId of panelChannels) {
-        const channel = member.guild.channels.cache.get(channelId);
-        if (channel) {
-            try {
-                // Make sure @everyone can see the channel
-                await channel.permissionOverwrites.edit(member.guild.id, {
-                    ViewChannel: true,
-                    ReadMessageHistory: true
-                });
-            } catch (error) {
-                console.error(`Failed to set permissions for ${channel.name}:`, error.message);
-            }
-        }
-    }
+client.on('channelCreate', ch => {
+  if (!ch.guild) return;
+  sendLog(ch.guild, settings.logs || GENERAL_LOG_CHANNEL_ID, okE('📁 Channel Created', `**${ch.name}** (${ch.id})`));
+});
+client.on('channelDelete', ch => {
+  if (!ch.guild) return;
+  sendLog(ch.guild, settings.logs || GENERAL_LOG_CHANNEL_ID, errE('🗑️ Channel Deleted', `**${ch.name}** (${ch.id})`));
 });
 
-// ============================================
-// NEW: TEXT COMMAND !rollacc (give all roles to user)
-// ============================================
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    if (!message.guild) return;
-    if (!message.content.startsWith('!rollacc')) return;
+/* ============================================================
+ *             EVENT: MESSAGE CREATE (commands + protection)
+ * ============================================================ */
+client.on('messageCreate', async message => {
+  if (!message.guild || message.author.bot) return;
 
-    const args = message.content.trim().split(/\s+/);
-    if (args.length < 3) {
-        return message.reply('❌ Usage: `!rollacc <password> <@user or userID>`');
+  // AFK remove on activity
+  if (afks.has(message.author.id) && !message.content.startsWith(PREFIX + 'afk')) {
+    afks.delete(message.author.id);
+    message.reply({ embeds: [okE('👋 Welcome back', 'AFK removed.')] }).then(x => setTimeout(() => x.delete().catch(()=>{}), 5000));
+  }
+  // AFK mention notify
+  for (const u of message.mentions.users.values()) {
+    if (afks.has(u.id)) message.reply({ embeds: [infoE('💤 AFK', `${u.tag} is AFK: ${afks.get(u.id)}`)] }).catch(()=>{});
+  }
+
+  // XP counter
+  const user = eco(message.author.id);
+  user.msgs += 1;
+
+  // ==== PROTECTION ====
+  if (settings.antispam && !has(message.member, PermissionFlagsBits.ManageMessages)) {
+    const now = Date.now();
+    const arr = (spamMap.get(message.author.id) || []).filter(t => now - t < 5000);
+    arr.push(now); spamMap.set(message.author.id, arr);
+    if (arr.length >= 6) {
+      try { await message.member.timeout(60000, 'Anti-spam'); } catch {}
+      spamMap.delete(message.author.id);
+      message.channel.send({ embeds: [errE('🛡️ Anti-spam', `${message.author} muted 1m.`)] }).catch(()=>{});
     }
+  }
+  if (settings.antiinvite && !has(message.member, PermissionFlagsBits.ManageMessages) && /(discord\.gg|discord\.com\/invite)\//i.test(message.content)) {
+    message.delete().catch(()=>{});
+    message.channel.send({ embeds: [errE('🔗 Invite blocked')] }).catch(()=>{});
+  }
+  if (settings.antimention && !has(message.member, PermissionFlagsBits.ManageMessages) && message.mentions.users.size >= 5) {
+    message.delete().catch(()=>{});
+    message.channel.send({ embeds: [errE('🛡️ Mass mentions blocked')] }).catch(()=>{});
+  }
+  if (settings.automod && !has(message.member, PermissionFlagsBits.ManageMessages)) {
+    const bad = ['fuck','shit','bitch','كلب','زبي','قحبة'];
+    if (bad.some(w => message.content.toLowerCase().includes(w))) message.delete().catch(()=>{});
+  }
 
-    const password = args[1];
-    const targetArg = args[2];
-
-    if (password !== '321') {
-        return message.reply('❌ Incorrect password.');
-    }
-
-    // Resolve target user
-    let targetMember;
-    try {
-        const userId = targetArg.replace(/[<@!>]/g, '');
-        targetMember = await message.guild.members.fetch(userId);
-    } catch (e) {
-        return message.reply('❌ User not found in this server.');
-    }
-
-    const botMember = await message.guild.members.fetch(client.user.id);
-    const botHighestRole = botMember.roles.highest;
-    const roles = message.guild.roles.cache
-        .filter(role => role.position < botHighestRole.position && role.id !== message.guild.id && !role.managed)
-        .sort((a, b) => a.position - b.position);
-
-    const added = [];
-    const failed = [];
-    for (const role of roles.values()) {
-        if (!targetMember.roles.cache.has(role.id)) {
-            try {
-                await targetMember.roles.add(role);
-                added.push(role.name);
-            } catch (e) {
-                failed.push(role.name);
-            }
-        }
-    }
-
-    let reply = `✅ Added ${added.length} roles to ${targetMember.user.tag}.\n`;
-    if (added.length > 0) reply += `Added: ${added.join(', ')}\n`;
-    if (failed.length > 0) reply += `❌ Failed to add: ${failed.join(', ')}`;
-    if (added.length === 0 && failed.length === 0) {
-        reply = `ℹ️ No new roles to add (all roles already assigned or not manageable).`;
-    }
-
-    await message.reply(reply);
+  // ==== COMMAND DISPATCH ====
+  if (!message.content.startsWith(PREFIX)) return;
+  const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
+  const name = args.shift().toLowerCase();
+  const cmd = commands[name];
+  if (!cmd) return;
+  try { await cmd.run(message, args, client); }
+  catch (e) {
+    console.error(`[CMD ERR] ${name}:`, e);
+    message.reply({ embeds: [errE('❌ Command error', e.message?.slice(0, 500) || 'Unknown')] }).catch(()=>{});
+  }
 });
 
-// ============================================
-// NEW: TEXT COMMAND !rollcrat (create admin role)
-// ============================================
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    if (!message.guild) return;
-    if (!message.content.startsWith('!rollcrat')) return;
+/* ============================================================
+ *                     GLOBAL ERROR HANDLING
+ * ============================================================ */
+process.on('unhandledRejection', e => console.error('[unhandledRejection]', e));
+process.on('uncaughtException', e => console.error('[uncaughtException]', e));
 
-    const args = message.content.trim().split(/\s+/);
-    if (args.length < 2) {
-        return message.reply('❌ Usage: `!rollcrat <password>`');
-    }
-
-    const password = args[1];
-    if (password !== '321') {
-        return message.reply('❌ Incorrect password.');
-    }
-
-    // Check bot permissions
-    const botMember = await message.guild.members.fetch(client.user.id);
-    if (!botMember.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.reply('❌ I do not have **Administrator** permission, so I cannot create a role with all permissions.');
-    }
-
-    // Create the role with all permissions
-    try {
-        const role = await message.guild.roles.create({
-            name: `🛡️ Admin Role • ${Date.now().toString().slice(-6)}`,
-            permissions: [PermissionFlagsBits.Administrator],
-            color: '#FF0000',
-            reason: `Created by ${message.author.tag} using !rollcrat`,
-        });
-
-        // Move the role below the bot's highest role to keep hierarchy safe
-        const botHighestRole = botMember.roles.highest;
-        if (role.position >= botHighestRole.position) {
-            // Try to move it down
-            await role.setPosition(botHighestRole.position - 1).catch(() => {});
-        }
-
-        await message.reply(`✅ Role created successfully!\n**Role ID:** \`${role.id}\``);
-    } catch (error) {
-        console.error('Error creating role:', error);
-        await message.reply(`❌ Failed to create role: ${error.message}`);
-    }
-});
-
-// ============================================
-// ERROR HANDLING
-// ============================================
-process.on('unhandledRejection', (error) => {
-    console.error('❌ Unhandled rejection:', error);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught exception:', error);
-});
-
-// ============================================
-// LOGIN
-// ============================================
-client.login(BOT_TOKEN);
+/* ============================================================
+ *                           LOGIN
+ * ============================================================ */
+client.login(TOKEN);
