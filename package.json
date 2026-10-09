@@ -1,15 +1,17 @@
 {
-  "name": "ticket-application-bot",
-  "version": "8.1.0",
-  "description": "Professional ticket system with multi-role staff support and DM-based applications",
+  "name": "khobza-smp-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for 𝑲𝒉𝒐𝒃𝒛𝒂 𝑺𝑴𝑷 — welcome, logs, moderation, and 100 commands.",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
-  "dependencies": {
-    "discord.js": "^14.14.1"
-  },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5"
   }
 }
